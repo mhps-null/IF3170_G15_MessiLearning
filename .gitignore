@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Data mentah berukuran besar (opsional jika data Kaggle terlalu besar)
+# data/raw/*.csv
+
+# Output sementara
+.DS_Store
+*.tmp
