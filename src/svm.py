@@ -12,6 +12,7 @@ Referensi Ilmiah:
 """
 
 import numpy as np
+import math
 from .base import BaseModel
 
 
@@ -52,6 +53,9 @@ class SVM(BaseModel):
         self.max_iter = max_iter
         self.tol = tol
 
+        self.x_ = None
+        self.y_ = None
+
         # Parameter hasil pelatihan
         self.alphas_ = None
         self.b_ = 0.0
@@ -63,22 +67,25 @@ class SVM(BaseModel):
         self.platt_A_ = -1.0
         self.platt_B_ = 0.0
 
-    def _compute_kernel(self, X1: np.ndarray, X2: np.ndarray) -> np.ndarray:
-        """
-        Menghitung matriks Gram K(X1, X2) sesuai pilihan kernel:
-        1. Linear: K(x, x') = x^T x'
-        2. Polynomial: K(x, x') = (gamma * x^T x' + coef0)^degree
-        3. Gaussian (RBF): K(x, x') = exp(-gamma * ||x - x'||^2)
-        """
-        # TODO (Anggota 4): Implementasikan ketiga formulasi kernel
-        raise NotImplementedError("SVM._compute_kernel belum diimplementasikan oleh Anggota 4.")
+    def _compute_kernel(self, X1: np.ndarray, X2: np.ndarray) :
+        if self.kernel == 'linear' :
+            return np.dot(X1,X2)
+        elif self.kernel == 'poly' :
+            return pow(self.gamma*np.dot(X1,X2) + self.coef0, self.degree)
+        elif self.kernel == 'rbf' :
+            return math.exp(-self.gamma*pow(np.linalg.norm(X1 - X2), 2))
+        else :
+            raise ValueError(self.kernel + " is not a valid kernel option!")
 
-    def decision_function(self, X: np.ndarray) -> np.ndarray:
+    def _decision_function(self, X1: np.ndarray) :
         """
         Menghitung skor keputusan f(x) = sum_{i in SV} alpha_i * y_i * K(x_i, x) + b.
         """
-        # TODO (Anggota 4): Implementasikan fungsi keputusan SVM
-        raise NotImplementedError("SVM.decision_function belum diimplementasikan oleh Anggota 4.")
+        sum = 0
+        for i in range(len(self.x_)) :
+            sum += self.alphas_[i] * self.y_[i] * self._compute_kernel(self.x_[i], X1) + self.b
+
+        return sum
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         """
