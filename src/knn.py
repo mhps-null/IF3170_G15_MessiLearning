@@ -6,6 +6,7 @@ Menginduk pada BaseModel dan mendukung metrik jarak Euclidean dan Manhattan.
 
 import numpy as np
 from .base import BaseModel
+from collections import Counter
 
 
 class KNN(BaseModel):
@@ -19,6 +20,10 @@ class KNN(BaseModel):
 
     def __init__(self, k: int = 5, metric: str = "euclidean", **kwargs):
         super().__init__(**kwargs)
+        if k <= 0:
+            raise ValueError("k harus lebih besar dari 0.")
+        if metric.lower() not in ("euclidean", "manhattan"):
+            raise ValueError("Metric harus 'euclidean' atau 'manhattan'.")
         self.k = k
         self.metric = metric.lower()
         self.X_train_ = None
@@ -30,13 +35,33 @@ class KNN(BaseModel):
         - Euclidean: d(x, x') = sqrt(sum((x_i - x'_i)^2))
         - Manhattan: d(x, x') = sum(|x_i - x'_i|)
         """
-        # TODO (Anggota 1): Implementasikan perhitungan jarak vektorisasi NumPy
-        raise NotImplementedError("KNN._compute_distances belum diimplementasikan oleh Anggota 1.")
+   
+        distances = np.zeros((len(X), len(self.X_train_)))    #inisiasi matriks hasil 
+
+        for i in range(len(X)):
+            for j in range(len(self.X_train_)):
+
+                if self.metric == "euclidean":
+                    distance = np.sqrt(np.sum((X[i]-self.X_train_[j])**2))
+                elif self.metric == "manhattan":
+                    distance = np.sum(np.abs(X[i]-self.X_train_[j]))
+                else:
+                    raise ValueError("Metric harus 'euclidean' atau 'manhattan'.")
+                distances[i, j] = distance
+
+        return distances
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         """
         Menyimpan data latih X dan label y.
         """
+        if len(X) == 0:
+            raise ValueError("Data training tidak boleh kosong.")
+        if len(X) != len(y):
+            raise ValueError("Jumlah sampel X dan y harus sama.")
+        if self.k > len(X):
+            raise ValueError("k tidak boleh melebihi jumlah data training.")
+        
         self.X_train_ = np.asarray(X, dtype=float)
         self.y_train_ = np.asarray(y, dtype=int)
         self.classes_ = np.unique(self.y_train_)
@@ -49,8 +74,30 @@ class KNN(BaseModel):
         P(y=1|X) = (1 / K) * sum_{k in N_K(X)} I(y_k == 1)
         Mengembalikan np.ndarray berukuran (n_samples, 2).
         """
-        # TODO (Anggota 1): Implementasikan predict_proba KNN
-        raise NotImplementedError("KNN.predict_proba belum diimplementasikan oleh Anggota 1.")
+
+        if not self.is_fitted:
+            raise ValueError("Model belum dilatih.")
+        X = np.asarray(X, dtype=float)
+
+        distances = self._compute_distances(X)
+        probabilities = []
+
+        # Tentukan label untuk setiap data test
+        for i in range(len(X)):
+            sorted_distance_indices = np.argsort(distances[i])
+
+            top_k_indices = sorted_distance_indices[:self.k]
+
+            top_k_labels = self.y_train_[top_k_indices]
+
+            # Hitung probabilitas
+            prob_class_1 = np.sum(top_k_labels == 1) / self.k
+            prob_class_0 = 1 - prob_class_1
+
+            probabilities.append([prob_class_0, prob_class_1])
+
+        return np.array(probabilities)
+
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """
