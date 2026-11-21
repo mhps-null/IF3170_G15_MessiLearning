@@ -43,8 +43,16 @@ Dasar Teori & Formulasi Matematis:
       $$R_\alpha(T) = R(T) + \alpha |L(T)|, \quad R(t) = \frac{W(t)}{W(\text{root})} \cdot \text{Impurity}(t)$$
       Pada setiap iterasi, simpul internal dengan tautan terlemah (weakest link) dipilih:
       $$\alpha_{\text{eff}}(t) = \frac{R(t) - R(T_t)}{|L(T_t)| - 1}, \quad t^* = \arg\min_{t \in \text{Internal}(T)} \alpha_{\text{eff}}(t)$$
-      dan dipangkas selama $\alpha_{\text{eff}}(t^*) \le \alpha$. Berbeda dari REP (Materi 10c),
-      Minimal CCP tidak membuang 15–20% data latih untuk pruning set terpisah.
+      dan dipangkas selama $\alpha_{\text{eff}}(t^*) \le \alpha$.
+   c) Surrogate Splits untuk Missing Values (Breiman et al., 1984 [4], Bab 5.3):
+      Ketika atribut utama $A^*$ bernilai NaN, simpul mencari atribut pengganti $A' \neq A^*$
+      yang memaksimalkan ukuran asosiasi prediktif (predictive measure of association):
+      $$\lambda(s^* \mid s') = \frac{\min(p_L, p_R) - (1 - P_{\text{agree}}(s^*, s'))}{\min(p_L, p_R)} > 0$$
+      untuk mengarahkan sampel bernilai hilang secara deterministik.
+   d) Particle Swarm Optimization / PSO untuk Optimasi Struktur & Hyperparameter DTL
+      (Kennedy & Eberhart, 1995 [7]; Shi & Eberhart, 1998 [8]):
+      Mengoptimasi vektor hyperparameter $(max\_depth, min\_samples\_leaf, min\_samples\_split, \log_{10}\alpha)$
+      terhadap fitness Macro F1 validasi internal (bebas leakage) menggunakan persamaan kecepatan & posisi partikel.
 
 Referensi Ilmiah (Format IEEE):
 [1] J. R. Quinlan, "Induction of decision trees," Machine Learning, vol. 1, no. 1, pp. 81–106, 1986.
@@ -52,13 +60,17 @@ Referensi Ilmiah (Format IEEE):
 [2] J. R. Quinlan, C4.5: Programs for Machine Learning. San Mateo, CA, USA: Morgan Kaufmann, 1993.
 [3] T. M. Mitchell, Machine Learning. New York, NY, USA: McGraw-Hill, 1997, ch. 3, pp. 52–80.
 [4] L. Breiman, J. H. Friedman, R. A. Olshen, and C. J. Stone, Classification and Regression Trees.
-    Belmont, CA, USA: Wadsworth International Group, 1984, ch. 3.
+    Belmont, CA, USA: Wadsworth International Group, 1984, ch. 3 & ch. 5.
 [5] G. Ke, Q. Meng, T. Finley, T. Wang, W. Chen, W. Ma, Q. Ye, and T. Y. Liu, "LightGBM: A highly
     efficient gradient boosting decision tree," in Advances in Neural Information Processing Systems
     (NeurIPS), vol. 30, 2017, pp. 3146–3154.
 [6] T. Chen and C. Guestrin, "XGBoost: A scalable tree boosting system," in Proc. 22nd ACM SIGKDD
     Int. Conf. Knowledge Discovery and Data Mining (KDD), 2016, pp. 785–794.
     DOI: 10.1145/2939672.2939785
+[7] J. Kennedy and R. Eberhart, "Particle swarm optimization," in Proc. IEEE Int. Conf. Neural
+    Networks (ICNN), vol. 4, 1995, pp. 1942–1948. DOI: 10.1109/ICNN.1995.488968
+[8] Y. Shi and R. Eberhart, "A modified particle swarm optimizer," in Proc. IEEE Int. Conf.
+    Evolutionary Computation (ICEC), 1998, pp. 69–73. DOI: 10.1109/ICEC.1998.699146
 """
 
 from __future__ import annotations
@@ -78,9 +90,25 @@ from .base import BaseModel
 from .utils import RANDOM_SEED
 
 
+def _is_val_missing(v: Any) -> bool:
+    """Mendeteksi nilai missing skalar (None, NaN, pandas.NA/NaT, atau string kosong/'nan')."""
+    if v is None:
+        return True
+    if isinstance(v, (float, np.floating)):
+        return bool(np.isnan(v))
+    if isinstance(v, str):
+        return v.strip().lower() in ("", "nan", "none", "null", "na", "<na>")
+    if type(v).__name__ in ("NAType", "NaTType"):
+        return True
+    try:
+        return bool(v != v)
+    except (TypeError, ValueError):
+        return True
+
+
 def _is_missing_array(arr: np.ndarray) -> np.ndarray:
     """
-    Mendeteksi elemen missing (NaN, None, atau string kosong/'nan'/'null')
+    Mendeteksi elemen missing (NaN, None, pandas.NA, atau string kosong/'nan'/'null')
     secara vektorisasi maupun objek campuran.
     """
     arr = np.asarray(arr)
@@ -90,17 +118,7 @@ def _is_missing_array(arr: np.ndarray) -> np.ndarray:
         return np.zeros(arr.shape, dtype=bool)
 
     flat = arr.ravel()
-    mask = np.fromiter(
-        (
-            v is None
-            or (isinstance(v, (float, np.floating)) and np.isnan(v))
-            or (isinstance(v, str) and v.strip().lower() in ("", "nan", "none", "null", "na"))
-            or (v != v)
-            for v in flat
-        ),
-        dtype=bool,
-        count=len(flat),
-    )
+    mask = np.fromiter((_is_val_missing(v) for v in flat), dtype=bool, count=len(flat))
     return mask.reshape(arr.shape)
 
 
@@ -168,6 +186,7 @@ class TreeNode:
         self.depth = int(depth)
         self.threshold_code = threshold_code
         self.children_codes = children_codes if children_codes is not None else {}
+        self.surrogates: List[Dict[str, Any]] = []
 
     @property
     def is_leaf(self) -> bool:
@@ -225,6 +244,8 @@ class DecisionTree(BaseModel):
         min_impurity_decrease: float = 1e-7,
         split_strategy: str = "exact",
         max_bins: int = 64,
+        missing_strategy: str = "fractional",
+        max_surrogates: int = 3,
         use_pruning: bool = False,
         pruning_method: str = "ccp",
         ccp_alpha: float = 0.0005,
@@ -254,6 +275,14 @@ class DecisionTree(BaseModel):
             )
         self.split_strategy = strategy_clean
         self.max_bins = max(2, int(max_bins))
+
+        miss_clean = missing_strategy.lower().strip()
+        if miss_clean not in ("fractional", "surrogate"):
+            raise ValueError(
+                f"missing_strategy '{missing_strategy}' tidak dikenali. Pilih 'fractional' atau 'surrogate'."
+            )
+        self.missing_strategy = miss_clean
+        self.max_surrogates = max(1, int(max_surrogates))
 
         pruning_clean = pruning_method.lower().strip()
         if pruning_clean not in ("ccp", "rep"):
@@ -878,6 +907,240 @@ class DecisionTree(BaseModel):
         }
 
     # =========================================================================
+    # 3b. BONUS 6 OPSI C: SURROGATE SPLITS UNTUK MISSING VALUES (BREIMAN ET AL., 1984)
+    # =========================================================================
+
+    def _find_surrogate_splits(
+        self,
+        primary_feat_idx: int,
+        known_indices: np.ndarray,
+        go_left_known: np.ndarray,
+        weights: np.ndarray,
+        X_num: Optional[np.ndarray],
+        X_bins: Optional[np.ndarray],
+        n_buckets_per_feat: Optional[List[int]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Mencari hingga `max_surrogates` atribut pengganti (surrogate splits) terbaik
+        sesuai Breiman et al. (1984 [4], Bab 5.3) berdasarkan ukuran asosiasi prediktif:
+            lambda(s* | s') = (min(p_L, p_R) - (1 - P_agree(s*, s'))) / min(p_L, p_R) > 0
+        """
+        if len(known_indices) < 4:
+            return []
+
+        w_known = weights[known_indices]
+        w_left_vec = np.where(go_left_known, w_known, 0.0)
+        w_right_vec = np.where(go_left_known, 0.0, w_known)
+        total_known_w = float(w_known.sum())
+        if total_known_w <= 1e-12:
+            return []
+
+        p_l = float(w_left_vec.sum()) / total_known_w
+        p_r = float(w_right_vec.sum()) / total_known_w
+        p_min = min(p_l, p_r)
+        if p_min <= 1e-9:
+            return []
+
+        use_hist = X_bins is not None and n_buckets_per_feat is not None
+        surrogates: List[Dict[str, Any]] = []
+
+        for j in range(self.n_features_):
+            if j == primary_feat_idx:
+                continue
+
+            if use_hist:
+                bcol = X_bins[known_indices, j]
+                n_b = n_buckets_per_feat[j]
+                h_l = np.bincount(bcol, weights=w_left_vec, minlength=n_b + 1)
+                h_r = np.bincount(bcol, weights=w_right_vec, minlength=n_b + 1)
+                w_both = float(h_l[1:].sum() + h_r[1:].sum())
+                if w_both <= 1e-9:
+                    continue
+
+                if self.feature_types_[j] == "continuous":
+                    edges = self._hist_bin_edges_.get(j)
+                    if edges is None or len(edges) == 0:
+                        continue
+                    cum_l = np.cumsum(h_l[1:])[:-1]
+                    cum_r = np.cumsum(h_r[1:])[:-1]
+                    tot_l = float(h_l[1:].sum())
+                    tot_r = float(h_r[1:].sum())
+                    agree_normal = (cum_l + (tot_r - cum_r)) / w_both
+                    agree_inv = (cum_r + (tot_l - cum_l)) / w_both
+                    best_n = int(np.argmax(agree_normal))
+                    best_i = int(np.argmax(agree_inv))
+                    if agree_normal[best_n] >= agree_inv[best_i]:
+                        p_agree = float(agree_normal[best_n])
+                        best_idx, invert = best_n, False
+                    else:
+                        p_agree = float(agree_inv[best_i])
+                        best_idx, invert = best_i, True
+                    lam = (p_min - (1.0 - p_agree)) / p_min
+                    if lam > 1e-6:
+                        surrogates.append(
+                            {
+                                "feature_idx": j,
+                                "is_categorical": False,
+                                "threshold": float(edges[best_idx]),
+                                "bucket_idx": best_idx,
+                                "code": None,
+                                "invert": invert,
+                                "lambda": float(lam),
+                            }
+                        )
+                else:
+                    tot_l = float(h_l[1:].sum())
+                    tot_r = float(h_r[1:].sum())
+                    agree_normal = (h_l[1:] + (tot_r - h_r[1:])) / w_both
+                    agree_inv = (h_r[1:] + (tot_l - h_l[1:])) / w_both
+                    best_n = int(np.argmax(agree_normal))
+                    best_i = int(np.argmax(agree_inv))
+                    if agree_normal[best_n] >= agree_inv[best_i]:
+                        p_agree = float(agree_normal[best_n])
+                        best_code, invert = best_n, False
+                    else:
+                        p_agree = float(agree_inv[best_i])
+                        best_code, invert = best_i, True
+                    lam = (p_min - (1.0 - p_agree)) / p_min
+                    if lam > 1e-6:
+                        surrogates.append(
+                            {
+                                "feature_idx": j,
+                                "is_categorical": True,
+                                "threshold": None,
+                                "bucket_idx": None,
+                                "code": best_code,
+                                "invert": invert,
+                                "lambda": float(lam),
+                            }
+                        )
+            else:
+                col_j = X_num[known_indices, j]
+                valid_j = ~np.isnan(col_j)
+                if not np.any(valid_j):
+                    continue
+                vals_j = col_j[valid_j]
+                wl_j = w_left_vec[valid_j]
+                wr_j = w_right_vec[valid_j]
+                w_both = float(wl_j.sum() + wr_j.sum())
+                if w_both <= 1e-9:
+                    continue
+
+                if self.feature_types_[j] == "continuous":
+                    uvals, inv_idx = np.unique(vals_j, return_inverse=True)
+                    m = len(uvals)
+                    if m <= 1:
+                        continue
+                    hl = np.bincount(inv_idx, weights=wl_j, minlength=m)
+                    hr = np.bincount(inv_idx, weights=wr_j, minlength=m)
+                    cum_l = np.cumsum(hl)[:-1]
+                    cum_r = np.cumsum(hr)[:-1]
+                    tot_l, tot_r = float(hl.sum()), float(hr.sum())
+                    agree_normal = (cum_l + (tot_r - cum_r)) / w_both
+                    agree_inv = (cum_r + (tot_l - cum_l)) / w_both
+                    best_n = int(np.argmax(agree_normal))
+                    best_i = int(np.argmax(agree_inv))
+                    if agree_normal[best_n] >= agree_inv[best_i]:
+                        p_agree = float(agree_normal[best_n])
+                        best_idx, invert = best_n, False
+                    else:
+                        p_agree = float(agree_inv[best_i])
+                        best_idx, invert = best_i, True
+                    lam = (p_min - (1.0 - p_agree)) / p_min
+                    if lam > 1e-6:
+                        surrogates.append(
+                            {
+                                "feature_idx": j,
+                                "is_categorical": False,
+                                "threshold": float(0.5 * (uvals[best_idx] + uvals[best_idx + 1])),
+                                "bucket_idx": None,
+                                "code": None,
+                                "invert": invert,
+                                "lambda": float(lam),
+                            }
+                        )
+                else:
+                    codes_j = vals_j.astype(np.int64)
+                    ucodes, inv_idx = np.unique(codes_j, return_inverse=True)
+                    k = len(ucodes)
+                    if k <= 1:
+                        continue
+                    hl = np.bincount(inv_idx, weights=wl_j, minlength=k)
+                    hr = np.bincount(inv_idx, weights=wr_j, minlength=k)
+                    tot_l, tot_r = float(hl.sum()), float(hr.sum())
+                    agree_normal = (hl + (tot_r - hr)) / w_both
+                    agree_inv = (hr + (tot_l - hl)) / w_both
+                    best_n = int(np.argmax(agree_normal))
+                    best_i = int(np.argmax(agree_inv))
+                    if agree_normal[best_n] >= agree_inv[best_i]:
+                        p_agree = float(agree_normal[best_n])
+                        best_code, invert = int(ucodes[best_n]), False
+                    else:
+                        p_agree = float(agree_inv[best_i])
+                        best_code, invert = int(ucodes[best_i]), True
+                    lam = (p_min - (1.0 - p_agree)) / p_min
+                    if lam > 1e-6:
+                        surrogates.append(
+                            {
+                                "feature_idx": j,
+                                "is_categorical": True,
+                                "threshold": None,
+                                "bucket_idx": None,
+                                "code": best_code,
+                                "invert": invert,
+                                "lambda": float(lam),
+                            }
+                        )
+
+        surrogates.sort(key=lambda s: s["lambda"], reverse=True)
+        return surrogates[: self.max_surrogates]
+
+    @staticmethod
+    def _route_missing_with_surrogates(
+        surrogates: List[Dict[str, Any]],
+        miss_indices: np.ndarray,
+        X_num: Optional[np.ndarray],
+        X_bins: Optional[np.ndarray],
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Mengarahkan sampel yang missing pada fitur utama memakai urutan surrogate splits."""
+        n_miss = len(miss_indices)
+        go_left = np.zeros(n_miss, dtype=bool)
+        resolved = np.zeros(n_miss, dtype=bool)
+
+        for sur in surrogates:
+            pending_pos = np.where(~resolved)[0]
+            if len(pending_pos) == 0:
+                break
+            row_ids = miss_indices[pending_pos]
+            j = sur["feature_idx"]
+            if X_bins is not None:
+                bvals = X_bins[row_ids, j]
+                avail = bvals > 0
+                if not np.any(avail):
+                    continue
+                if not sur["is_categorical"]:
+                    cond = bvals[avail] <= (sur["bucket_idx"] + 1)
+                else:
+                    cond = bvals[avail] == (sur["code"] + 1)
+            else:
+                vals = X_num[row_ids, j]
+                avail = ~np.isnan(vals)
+                if not np.any(avail):
+                    continue
+                if not sur["is_categorical"]:
+                    cond = vals[avail] <= sur["threshold"]
+                else:
+                    cond = vals[avail] == float(sur["code"])
+
+            if sur["invert"]:
+                cond = ~cond
+            hit_pos = pending_pos[avail]
+            go_left[hit_pos] = cond
+            resolved[hit_pos] = True
+
+        return go_left, resolved
+
+    # =========================================================================
     # 4. KONSTRUKSI POHON KEPUTUSAN REKURSIF & DISTRIBUSI PECAHAN SAMPEL NAN
     # =========================================================================
 
@@ -1076,15 +1339,49 @@ class DecisionTree(BaseModel):
             r_right = node.branch_weights["right"]
 
             if len(miss_indices) > 0:
-                miss_w_left = weights[miss_indices] * r_left
-                keep_miss_left = miss_w_left >= min_frac_weight
-                left_idx = np.concatenate([left_known_idx, miss_indices[keep_miss_left]])
-                left_w = np.concatenate([weights[left_known_idx], miss_w_left[keep_miss_left]])
+                if self.missing_strategy == "surrogate":
+                    # Bonus 6 Opsi C — Surrogate Splits (Breiman et al., 1984 [4], Bab 5.3):
+                    # Cari atribut pengganti dengan asosiasi prediktif lambda > 0 terhadap primary split
+                    node.surrogates = self._find_surrogate_splits(
+                        primary_feat_idx=best_feature_idx,
+                        known_indices=known_indices,
+                        go_left_known=go_left_known,
+                        weights=weights,
+                        X_num=X_num,
+                        X_bins=X_bins,
+                        n_buckets_per_feat=n_buckets_per_feat,
+                    )
+                    miss_go_left, miss_resolved = self._route_missing_with_surrogates(
+                        surrogates=node.surrogates,
+                        miss_indices=miss_indices,
+                        X_num=X_num,
+                        X_bins=X_bins,
+                    )
+                    resolved_left = miss_indices[miss_resolved & miss_go_left]
+                    resolved_right = miss_indices[miss_resolved & ~miss_go_left]
+                    unresolved = miss_indices[~miss_resolved]
 
-                miss_w_right = weights[miss_indices] * r_right
-                keep_miss_right = miss_w_right >= min_frac_weight
-                right_idx = np.concatenate([right_known_idx, miss_indices[keep_miss_right]])
-                right_w = np.concatenate([weights[right_known_idx], miss_w_right[keep_miss_right]])
+                    # Jika semua surrogate juga NaN, arahkan ke cabang mayoritas (aturan standar CART)
+                    if len(unresolved) > 0:
+                        if r_left >= r_right:
+                            resolved_left = np.concatenate([resolved_left, unresolved])
+                        else:
+                            resolved_right = np.concatenate([resolved_right, unresolved])
+
+                    left_idx = np.concatenate([left_known_idx, resolved_left])
+                    left_w = weights[left_idx]
+                    right_idx = np.concatenate([right_known_idx, resolved_right])
+                    right_w = weights[right_idx]
+                else:
+                    miss_w_left = weights[miss_indices] * r_left
+                    keep_miss_left = miss_w_left >= min_frac_weight
+                    left_idx = np.concatenate([left_known_idx, miss_indices[keep_miss_left]])
+                    left_w = np.concatenate([weights[left_known_idx], miss_w_left[keep_miss_left]])
+
+                    miss_w_right = weights[miss_indices] * r_right
+                    keep_miss_right = miss_w_right >= min_frac_weight
+                    right_idx = np.concatenate([right_known_idx, miss_indices[keep_miss_right]])
+                    right_w = np.concatenate([weights[right_known_idx], miss_w_right[keep_miss_right]])
             else:
                 left_idx = left_known_idx
                 left_w = weights[left_known_idx]
@@ -1306,20 +1603,53 @@ class DecisionTree(BaseModel):
 
             if np.any(miss_mask):
                 miss_idx = np.where(miss_mask)[0]
-                X_miss = X_sub[miss_idx]
-                r_left = node.branch_weights.get("left", 0.5)
-                r_right = node.branch_weights.get("right", 0.5)
-                p_left = (
-                    self._predict_batch_proba(X_miss, node.left)
-                    if node.left is not None
-                    else node.class_distribution
-                )
-                p_right = (
-                    self._predict_batch_proba(X_miss, node.right)
-                    if node.right is not None
-                    else node.class_distribution
-                )
-                out[miss_idx] = r_left * p_left + r_right * p_right
+                if self.missing_strategy == "surrogate" and node.surrogates:
+                    miss_go_left, miss_resolved = self._route_missing_with_surrogates(
+                        surrogates=node.surrogates,
+                        miss_indices=miss_idx,
+                        X_num=X_sub,
+                        X_bins=None,
+                    )
+                    res_left = miss_idx[miss_resolved & miss_go_left]
+                    res_right = miss_idx[miss_resolved & ~miss_go_left]
+                    unres = miss_idx[~miss_resolved]
+
+                    if len(res_left) > 0:
+                        out[res_left] = (
+                            self._predict_batch_proba(X_sub[res_left], node.left)
+                            if node.left is not None
+                            else node.class_distribution
+                        )
+                    if len(res_right) > 0:
+                        out[res_right] = (
+                            self._predict_batch_proba(X_sub[res_right], node.right)
+                            if node.right is not None
+                            else node.class_distribution
+                        )
+                    if len(unres) > 0:
+                        r_left = node.branch_weights.get("left", 0.5)
+                        r_right = node.branch_weights.get("right", 0.5)
+                        target_child = node.left if r_left >= r_right else node.right
+                        out[unres] = (
+                            self._predict_batch_proba(X_sub[unres], target_child)
+                            if target_child is not None
+                            else node.class_distribution
+                        )
+                else:
+                    X_miss = X_sub[miss_idx]
+                    r_left = node.branch_weights.get("left", 0.5)
+                    r_right = node.branch_weights.get("right", 0.5)
+                    p_left = (
+                        self._predict_batch_proba(X_miss, node.left)
+                        if node.left is not None
+                        else node.class_distribution
+                    )
+                    p_right = (
+                        self._predict_batch_proba(X_miss, node.right)
+                        if node.right is not None
+                        else node.class_distribution
+                    )
+                    out[miss_idx] = r_left * p_left + r_right * p_right
 
             return out
 
@@ -1583,6 +1913,7 @@ class DecisionTree(BaseModel):
         node.children = {}
         node.children_codes = {}
         node.branch_weights = {}
+        node.surrogates = []
 
     def _compute_weakest_link_stats(
         self, root: TreeNode, total_w: float
@@ -2079,9 +2410,11 @@ def export_tree_visualization(
     opt_tags = []
     if model.split_strategy == "histogram":
         opt_tags.append(f"Histogram Quantile B={model.max_bins}")
+    if model.missing_strategy == "surrogate":
+        opt_tags.append(f"Surrogate Splits (K={model.max_surrogates})")
     if model.use_pruning:
         if model.pruning_method == "ccp":
-            opt_tags.append(f"Minimal CCP α={model.ccp_alpha}")
+            opt_tags.append(f"Minimal CCP α={model.ccp_alpha:.6g}")
         else:
             opt_tags.append("REP")
     opt_str = (" + " + " + ".join(opt_tags)) if opt_tags else ""
@@ -2121,6 +2454,245 @@ def export_tree_visualization(
     plt.close(fig)
     print(f"[Tree Visualization Saved] Berhasil disimpan di: {output_path}")
     return output_path
+
+
+# =============================================================================
+# 9. BONUS 6 OPSI A: PARTICLE SWARM OPTIMIZATION (PSO) UNTUK STRUKTUR DTL
+# =============================================================================
+
+
+class PSODecisionTreeOptimizer(BaseModel):
+    r"""
+    Bonus Optimasi 6 (Opsi A) — Particle Swarm Optimization (PSO) untuk Optimasi Struktur
+    dan Hyperparameter Decision Tree (100% Pure NumPy from Scratch).
+
+    Algoritma ini mengoptimasi vektor parameter struktur & pruning:
+        $\mathbf{z} = [\text{max\_depth}, \text{min\_samples\_leaf}, \text{min\_samples\_split}, \log_{10}(\alpha_{\text{ccp}})]$
+    dengan fungsi objektif (fitness) berupa Macro F1-Score pada validasi internal
+    (stratified holdout / K-Fold CV di dalam data latih — bebas data leakage terhadap validation set luar).
+
+    Persamaan Pembaruan Partikel (Kennedy & Eberhart, 1995 [7]; Shi & Eberhart, 1998 [8]):
+        $$v_i^{(t+1)} = w^{(t)} v_i^{(t)} + c_1 r_1 (p_i^{\text{best}} - z_i^{(t)}) + c_2 r_2 (g^{\text{best}} - z_i^{(t)})$$
+        $$z_i^{(t+1)} = \text{clip}(z_i^{(t)} + v_i^{(t+1)}, \mathbf{z}_{\min}, \mathbf{z}_{\max})$$
+    dengan bobot inersia meluruh linier $w^{(t)} = w_{\max} - \frac{t}{T}(w_{\max} - w_{\min})$.
+
+    Referensi Ilmiah (IEEE):
+    [7] J. Kennedy and R. Eberhart, "Particle swarm optimization," in Proc. IEEE Int. Conf.
+        Neural Networks (ICNN), vol. 4, 1995, pp. 1942–1948. DOI: 10.1109/ICNN.1995.488968
+    [8] Y. Shi and R. Eberhart, "A modified particle swarm optimizer," in Proc. IEEE Int. Conf.
+        Evolutionary Computation (ICEC), 1998, pp. 69–73. DOI: 10.1109/ICEC.1998.699146
+    """
+
+    def __init__(
+        self,
+        criterion: str = "c45",
+        split_strategy: str = "histogram",
+        max_bins: int = 64,
+        missing_strategy: str = "fractional",
+        n_particles: int = 8,
+        n_iters: int = 6,
+        w_max: float = 0.9,
+        w_min: float = 0.4,
+        c1: float = 1.5,
+        c2: float = 1.5,
+        inner_val_ratio: float = 0.2,
+        patience: int = 3,
+        categorical_features: Optional[List[Union[int, bool]]] = None,
+        random_state: int = RANDOM_SEED,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.criterion = criterion
+        self.split_strategy = split_strategy
+        self.max_bins = int(max_bins)
+        self.missing_strategy = missing_strategy
+        self.n_particles = max(3, int(n_particles))
+        self.n_iters = max(2, int(n_iters))
+        self.w_max = float(w_max)
+        self.w_min = float(w_min)
+        self.c1 = float(c1)
+        self.c2 = float(c2)
+        self.inner_val_ratio = float(inner_val_ratio)
+        self.patience = max(1, int(patience))
+        self.categorical_features = categorical_features
+        self.random_state = int(random_state)
+
+        # Ruang pencarian: [max_depth, min_samples_leaf, min_samples_split, log10(ccp_alpha)]
+        self.bounds_low_ = np.array([6.0, 1.0, 2.0, -4.5], dtype=float)
+        self.bounds_high_ = np.array([26.0, 25.0, 60.0, -2.5], dtype=float)
+
+        self.best_params_: Dict[str, Any] = {}
+        self.best_score_: float = -1.0
+        self.best_model_: Optional[DecisionTree] = None
+        self.history_: List[Dict[str, Any]] = []
+
+    @staticmethod
+    def _macro_f1(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        def _f1_bin(yt: np.ndarray, yp: np.ndarray) -> float:
+            tp = np.sum((yt == 1) & (yp == 1))
+            fp = np.sum((yt == 0) & (yp == 1))
+            fn = np.sum((yt == 1) & (yp == 0))
+            denom = 2 * tp + fp + fn
+            return float(2 * tp / denom) if denom > 0 else 0.0
+
+        return 0.5 * (_f1_bin(y_true, y_pred) + _f1_bin(1 - y_true, 1 - y_pred))
+
+    def _decode_particle(self, pos: np.ndarray) -> Dict[str, Any]:
+        max_depth = int(round(float(pos[0])))
+        min_leaf = max(1, int(round(float(pos[1]))))
+        min_split = max(2 * min_leaf, int(round(float(pos[2]))))
+        ccp_alpha = float(10.0 ** float(pos[3]))
+        return {
+            "max_depth": max_depth,
+            "min_samples_leaf": min_leaf,
+            "min_samples_split": min_split,
+            "ccp_alpha": ccp_alpha,
+        }
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "PSODecisionTreeOptimizer":
+        """
+        Menjalankan pencarian PSO pada data latih (menggunakan stratified inner holdout
+        agar bebas data leakage terhadap validation/test set eksternal), lalu melatih ulang
+        model DecisionTree terbaik pada 100% data latih (X, y).
+        """
+        y_arr = np.asarray(y).astype(int).ravel()
+        self.classes_ = np.unique(y_arr)
+        rng = np.random.default_rng(self.random_state)
+
+        # Stratified inner split khusus untuk evaluasi fitness PSO di dalam X_train
+        idx_0 = np.where(y_arr == 0)[0]
+        idx_1 = np.where(y_arr == 1)[0]
+        rng.shuffle(idx_0)
+        rng.shuffle(idx_1)
+        n_v0 = max(1, int(round(len(idx_0) * self.inner_val_ratio)))
+        n_v1 = max(1, int(round(len(idx_1) * self.inner_val_ratio)))
+        in_val_idx = np.concatenate([idx_0[:n_v0], idx_1[:n_v1]])
+        in_tr_idx = np.concatenate([idx_0[n_v0:], idx_1[n_v1:]])
+
+        X_arr = X.to_numpy(dtype=object) if hasattr(X, "to_numpy") else np.asarray(X)
+        X_in_tr, y_in_tr = X_arr[in_tr_idx], y_arr[in_tr_idx]
+        X_in_va, y_in_va = X_arr[in_val_idx], y_arr[in_val_idx]
+
+        # Inisialisasi posisi & kecepatan partikel
+        dim = len(self.bounds_low_)
+        span = self.bounds_high_ - self.bounds_low_
+        positions = self.bounds_low_ + rng.random((self.n_particles, dim)) * span
+        # Seed 1 partikel di titik awal yang baik agar konvergensi cepat
+        positions[0] = np.array([18.0, 5.0, 10.0, np.log10(0.0003)], dtype=float)
+        velocities = rng.uniform(-0.15, 0.15, size=(self.n_particles, dim)) * span
+
+        p_best_pos = positions.copy()
+        p_best_scores = np.full(self.n_particles, -1.0, dtype=float)
+        g_best_pos = positions[0].copy()
+        g_best_score = -1.0
+
+        eval_cache: Dict[Tuple[int, int, int, int], float] = {}
+        self.history_ = []
+        no_improve = 0
+
+        for it in range(self.n_iters):
+            improved_this_iter = False
+            iter_scores = []
+
+            for p in range(self.n_particles):
+                params = self._decode_particle(positions[p])
+                cache_key = (
+                    params["max_depth"],
+                    params["min_samples_leaf"],
+                    params["min_samples_split"],
+                    int(round(np.log10(params["ccp_alpha"]) * 20)),
+                )
+                if cache_key in eval_cache:
+                    score = eval_cache[cache_key]
+                else:
+                    clf = DecisionTree(
+                        criterion=self.criterion,
+                        split_strategy=self.split_strategy,
+                        max_bins=self.max_bins,
+                        missing_strategy=self.missing_strategy,
+                        max_depth=params["max_depth"],
+                        min_samples_leaf=params["min_samples_leaf"],
+                        min_samples_split=params["min_samples_split"],
+                        use_pruning=True,
+                        pruning_method="ccp",
+                        ccp_alpha=params["ccp_alpha"],
+                        categorical_features=self.categorical_features,
+                        random_state=self.random_state,
+                    )
+                    clf.fit(X_in_tr, y_in_tr)
+                    preds = clf.predict(X_in_va)
+                    score = self._macro_f1(y_in_va, preds)
+                    eval_cache[cache_key] = score
+
+                iter_scores.append(score)
+                if score > p_best_scores[p]:
+                    p_best_scores[p] = score
+                    p_best_pos[p] = positions[p].copy()
+                if score > g_best_score + 1e-6:
+                    g_best_score = score
+                    g_best_pos = positions[p].copy()
+                    improved_this_iter = True
+
+            self.history_.append(
+                {
+                    "iter": it + 1,
+                    "g_best_macro_f1": float(g_best_score),
+                    "mean_macro_f1": float(np.mean(iter_scores)),
+                    "best_params": self._decode_particle(g_best_pos),
+                }
+            )
+
+            if improved_this_iter:
+                no_improve = 0
+            else:
+                no_improve += 1
+                if no_improve >= self.patience:
+                    break
+
+            # Pembaruan kecepatan & posisi partikel (Kennedy & Eberhart, 1995; Shi & Eberhart, 1998)
+            w = self.w_max - (it / max(1, self.n_iters - 1)) * (self.w_max - self.w_min)
+            r1 = rng.random((self.n_particles, dim))
+            r2 = rng.random((self.n_particles, dim))
+            velocities = (
+                w * velocities
+                + self.c1 * r1 * (p_best_pos - positions)
+                + self.c2 * r2 * (g_best_pos - positions)
+            )
+            positions = np.clip(positions + velocities, self.bounds_low_, self.bounds_high_)
+
+        self.best_score_ = float(g_best_score)
+        self.best_params_ = self._decode_particle(g_best_pos)
+
+        # Latih ulang model DTL terbaik pada 100% data latih (X, y)
+        self.best_model_ = DecisionTree(
+            criterion=self.criterion,
+            split_strategy=self.split_strategy,
+            max_bins=self.max_bins,
+            missing_strategy=self.missing_strategy,
+            max_depth=self.best_params_["max_depth"],
+            min_samples_leaf=self.best_params_["min_samples_leaf"],
+            min_samples_split=self.best_params_["min_samples_split"],
+            use_pruning=True,
+            pruning_method="ccp",
+            ccp_alpha=self.best_params_["ccp_alpha"],
+            categorical_features=self.categorical_features,
+            random_state=self.random_state,
+        )
+        if hasattr(X, "columns"):
+            self.best_model_.feature_names_ = [str(c) for c in X.columns]
+        self.best_model_.fit(X_arr, y_arr)
+        self.is_fitted = True
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        if not self.is_fitted or self.best_model_ is None:
+            raise RuntimeError("PSODecisionTreeOptimizer belum dilatih.")
+        return self.best_model_.predict_proba(X)
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        if not self.is_fitted or self.best_model_ is None:
+            raise RuntimeError("PSODecisionTreeOptimizer belum dilatih.")
+        return self.best_model_.predict(X)
 
 
 if __name__ == "__main__":
