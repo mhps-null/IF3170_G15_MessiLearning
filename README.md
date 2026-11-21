@@ -9,13 +9,11 @@ Implementasi algoritma **Supervised Learning *from Scratch*** (KNN, Decision Tre
 
 | NIM | Peran & Modul Tanggung Jawab | Branch Kerja |
 | :---: | :--- | :--- |
-| **13524042** | Anggota 1 — Data Engineering Pipeline (`src/preprocessing.py`) & KNN (`src/knn.py`) | `feat/anggota1-knn-pipeline` |
-| **13524053** | Anggota 2 — Decision Tree Learning (`src/dtl.py`), Top-$N$ Tree Visualizer & Post-Pruning | `feat/anggota2-dtl` |
-| **13524057** | Anggota 3 — Logistic Regression (`src/logistic_regression.py`), Adam Optimizer & Loss Contour Video | `feat/anggota3-logreg` |
-| **13524060** | Anggota 4 — Support Vector Machine (`src/svm.py`), SMO/Pegasos & 2D Margin Plotter | `feat/anggota4-svm` |
-| **13524063** | Anggota 5 — Naive Bayes & TAN (`src/naive_bayes.py`), BN DAG Visualizer & Cost-Sensitive Classification | `feat/anggota5-nb-cost` |
-
-> *(Catatan: Silakan sesuaikan urutan NIM dengan pembagian Anggota 1–5 yang disepakati kelompok).*
+| **13524042** | Data Engineering Pipeline (`src/preprocessing.py`) & KNN (`src/knn.py`) | `feat/anggota1-knn-pipeline` |
+| **13524053** | Decision Tree Learning (`src/dtl.py`), Top-$N$ Tree Visualizer & Post-Pruning | `feat/anggota2-dtl` |
+| **13524060** | Logistic Regression (`src/logistic_regression.py`), Adam Optimizer & Loss Contour Video | `feat/anggota3-logreg` |
+| **13524057** | Support Vector Machine (`src/svm.py`), SMO/Pegasos & 2D Margin Plotter | `feat/anggota4-svm` |
+| **13524063** | Naive Bayes & TAN (`src/naive_bayes.py`), BN DAG Visualizer & Cost-Sensitive Classification | `feat/anggota5-nb-cost` |
 
 ---
 
