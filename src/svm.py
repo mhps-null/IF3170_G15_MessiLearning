@@ -34,12 +34,15 @@ class SVM(BaseModel):
             (jika None atau 'scale', gunakan 1 / (n_features * var); jika 'auto', 1 / n_features).
         coef0 (float): Konstanta independen r pada kernel polinomial (default=1.0).
         solver (str): Solver from-scratch ('smo' atau 'cvxopt' untuk kompatibilitas API).
-        max_iter (int): Jumlah iterasi maksimum dual coordinate ascent / SMO.
+        max_iter (int): Batas iterasi SMO dalam satuan 'putaran' data (maks. max_iter * n pembaruan).
         tol (float): Toleransi pelanggaran kondisi KKT.
         max_samples (int | None): Jika diisi dan n > max_samples, model dilatih pada subsampel
             berstrata sebesar max_samples (kelas dipertahankan proporsional). Model akhir
             tetap diskalakan Platt pada SELURUH data latih.
-        random_state (int): Seed untuk subsampling dan urutan pembaruan SMO.
+        random_state (int): Seed untuk subsampling berstrata (solver SMO sendiri deterministik).
+        kernel_dtype (str): Presisi matriks Gram saat pelatihan ('float32' atau 'float64').
+            float32 menghemat memori 2x (n=21k: ~1.8 GB vs ~3.5 GB); variabel dual, bias,
+            dan decision_function tetap float64.
     """
 
     def __init__(
@@ -54,6 +57,7 @@ class SVM(BaseModel):
         tol: float = 1e-3,
         max_samples: int = None,
         random_state: int = RANDOM_SEED,
+        kernel_dtype: str = "float32",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -65,6 +69,8 @@ class SVM(BaseModel):
             raise ValueError("Solver harus 'smo' atau 'cvxopt'.")
         if max_samples is not None and max_samples < 2:
             raise ValueError("max_samples harus None atau >= 2.")
+        if kernel_dtype not in ("float32", "float64"):
+            raise ValueError("kernel_dtype harus 'float32' atau 'float64'.")
 
         self.C = float(C)
         self.kernel = kernel.lower()
@@ -76,6 +82,7 @@ class SVM(BaseModel):
         self.tol = float(tol)
         self.max_samples = max_samples
         self.random_state = int(random_state)
+        self.kernel_dtype = kernel_dtype
 
         # Parameter hasil pelatihan
         self.alphas_ = None                    # alpha untuk SELURUH data latih
@@ -103,29 +110,41 @@ class SVM(BaseModel):
         return 1.0 / denom if denom > 0.0 else 1.0 / n_features
 
     # ------------------------------------------------------------------ kernel
-    def _compute_kernel(self, X1: np.ndarray, X2: np.ndarray) -> np.ndarray:
+    def _compute_kernel(self, X1: np.ndarray, X2: np.ndarray, dtype=np.float64) -> np.ndarray:
         """
         Menghitung matriks Gram K(X1, X2) sesuai pilihan kernel:
         1. Linear: K(x, x') = x^T x'
         2. Polynomial: K(x, x') = (gamma * x^T x' + coef0)^degree
         3. Gaussian (RBF): K(x, x') = exp(-gamma * ||x - x'||^2)
+
+        Semua operasi setelah perkalian matriks dilakukan IN-PLACE pada satu buffer,
+        sehingga puncak memori hanya satu matriks (bukan 3-4 temporary berukuran n x n).
         """
-        X1 = np.asarray(X1, dtype=np.float64)
-        X2 = np.asarray(X2, dtype=np.float64)
+        X1 = np.asarray(X1, dtype=dtype)
+        X2 = np.asarray(X2, dtype=dtype)
         gamma = self._gamma_
         if gamma is None:
             gamma = self._resolve_gamma(X1)
 
+        G = X1 @ X2.T
         if self.kernel == "linear":
-            return X1 @ X2.T
+            return G
         if self.kernel == "poly":
-            return (gamma * (X1 @ X2.T) + self.coef0) ** self.degree
+            G *= gamma
+            G += self.coef0
+            np.power(G, self.degree, out=G)
+            return G
         if self.kernel == "rbf":
             # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a.b (dipotong >= 0 untuk galat pembulatan)
-            x1_sq = np.sum(X1 ** 2, axis=1, keepdims=True)
-            x2_sq = np.sum(X2 ** 2, axis=1, keepdims=True).T
-            dist_sq = np.maximum(x1_sq + x2_sq - 2.0 * (X1 @ X2.T), 0.0)
-            return np.exp(-gamma * dist_sq)
+            x1_sq = np.einsum("ij,ij->i", X1, X1)[:, None]
+            x2_sq = np.einsum("ij,ij->i", X2, X2)[None, :]
+            G *= -2.0
+            G += x1_sq
+            G += x2_sq
+            np.maximum(G, 0.0, out=G)
+            G *= -gamma
+            np.exp(G, out=G)
+            return G
         raise ValueError(f"Kernel tidak dikenal: '{self.kernel}'.")
 
     # --------------------------------------------------------- decision function
@@ -146,102 +165,101 @@ class SVM(BaseModel):
             out[s:s + _PREDICT_BATCH] = coef @ K
         return out + self.b_
 
-    def _solve_smo(self, K: np.ndarray, y_sv: np.ndarray, rng: np.random.Generator):
+    def _solve_smo(self, K: np.ndarray, y_sv: np.ndarray, rng: np.random.Generator = None):
         """
-        Menyelesaikan masalah dual SVM dengan pembaruan koordinat ganda (SMO-style)
-        pada variabel dual alpha_i in [0, C].
+        Menyelesaikan masalah dual SVM:
+            min_a 0.5 a^T Q a - 1^T a,  0 <= a <= C,  y^T a = 0,  Q_ij = y_i y_j K_ij
+        dengan SMO pemilihan pasangan orde-dua (maximal violating pair, Fan-Chen-Lin 2005,
+        seperti libsvm). Tiap iterasi vektorial O(n); berhenti bila celah KKT < tol,
+        sehingga konvergen deterministik ke solusi optimum (rng tidak dipakai).
+
+        max_iter dihitung sebagai jumlah "putaran" data: batas total pembaruan pasangan
+        adalah max_iter * n_samples.
         """
-        n_samples = len(y_sv)
-        alphas = np.zeros(n_samples, dtype=np.float64)
-        b = 0.0
-        f = np.zeros(n_samples, dtype=np.float64)
+        n = len(y_sv)
+        C, eps, tau = self.C, self.tol, 1e-12
+        alphas = np.zeros(n, dtype=np.float64)
+        grad = -np.ones(n, dtype=np.float64)      # gradien dual: Q a - 1
+        diag = np.diag(K).astype(np.float64)
+        pos, neg = y_sv > 0, y_sv < 0
 
-        for _ in range(self.max_iter):
-            num_changed = 0
-            order = rng.permutation(n_samples)
-
-            for i in order:
-                E_i = f[i] - y_sv[i]
-                violates_kkt = (y_sv[i] * E_i < -self.tol and alphas[i] < self.C) or (
-                    y_sv[i] * E_i > self.tol and alphas[i] > 0.0
-                )
-                if not violates_kkt:
-                    continue
-
-                pool_size = min(64, n_samples)
-                cand_pool = rng.choice(n_samples, size=pool_size, replace=False)
-                cand_pool = cand_pool[cand_pool != i]
-                if len(cand_pool) == 0:
-                    continue
-
-                E_cands = f[cand_pool] - y_sv[cand_pool]
-                j = int(cand_pool[int(np.argmax(np.abs(E_i - E_cands)))])
-                E_j = f[j] - y_sv[j]
-
-                alpha_i_old = alphas[i]
-                alpha_j_old = alphas[j]
-
-                if y_sv[i] != y_sv[j]:
-                    L = max(0.0, alpha_j_old - alpha_i_old)
-                    H = min(self.C, self.C + alpha_j_old - alpha_i_old)
-                else:
-                    L = max(0.0, alpha_i_old + alpha_j_old - self.C)
-                    H = min(self.C, alpha_i_old + alpha_j_old)
-
-                if L >= H:
-                    continue
-
-                eta = K[i, i] + K[j, j] - 2.0 * K[i, j]
-                if eta <= 1e-12:
-                    continue
-
-                alpha_j_new = alpha_j_old + y_sv[j] * (E_i - E_j) / eta
-                alpha_j_new = float(np.clip(alpha_j_new, L, H))
-
-                if abs(alpha_j_new - alpha_j_old) < 1e-6:
-                    continue
-
-                alpha_i_new = alpha_i_old + y_sv[i] * y_sv[j] * (alpha_j_old - alpha_j_new)
-
-                b1 = (
-                    b
-                    - E_i
-                    - y_sv[i] * (alpha_i_new - alpha_i_old) * K[i, i]
-                    - y_sv[j] * (alpha_j_new - alpha_j_old) * K[i, j]
-                )
-                b2 = (
-                    b
-                    - E_j
-                    - y_sv[i] * (alpha_i_new - alpha_i_old) * K[i, j]
-                    - y_sv[j] * (alpha_j_new - alpha_j_old) * K[j, j]
-                )
-
-                if 0.0 < alpha_i_new < self.C:
-                    b_new = b1
-                elif 0.0 < alpha_j_new < self.C:
-                    b_new = b2
-                else:
-                    b_new = 0.5 * (b1 + b2)
-
-                delta_alpha_i = alpha_i_new - alpha_i_old
-                delta_alpha_j = alpha_j_new - alpha_j_old
-                delta_b = b_new - b
-
-                f += (
-                    delta_alpha_i * y_sv[i] * K[i, :]
-                    + delta_alpha_j * y_sv[j] * K[j, :]
-                    + delta_b
-                )
-
-                alphas[i] = alpha_i_new
-                alphas[j] = alpha_j_new
-                b = b_new
-                num_changed += 1
-
-            if num_changed == 0:
+        for _ in range(max(self.max_iter, 1) * n):
+            up = (pos & (alphas < C)) | (neg & (alphas > 0.0))
+            low = (pos & (alphas > 0.0)) | (neg & (alphas < C))
+            if not up.any() or not low.any():
                 break
 
-        return alphas, float(b)
+            yG = y_sv * grad
+            i = int(np.argmax(np.where(up, -yG, -np.inf)))
+            g_max = -yG[i]
+            g_max2 = yG[low].max()
+            if g_max + g_max2 < eps:               # kondisi KKT terpenuhi dalam toleransi
+                break
+
+            # pilih j: penurunan objektif terbesar (orde-dua) di antara pelanggar
+            yi = y_sv[i]
+            Ki = K[i]
+            b_t = g_max + yG                        # > 0 untuk pelanggar
+            a_t = diag[i] + diag - 2.0 * yi * y_sv * Ki
+            a_t = np.where(a_t > 0.0, a_t, tau)
+            score = np.where(low & (b_t > 0.0), -(b_t * b_t) / a_t, np.inf)
+            j = int(np.argmin(score))
+            if not np.isfinite(score[j]):
+                break
+
+            yj = y_sv[j]
+            quad = diag[i] + diag[j] - 2.0 * float(Ki[j])
+            if quad <= 0.0:
+                quad = tau
+            ai_old, aj_old = alphas[i], alphas[j]
+
+            if yi != yj:
+                delta = (-grad[i] - grad[j]) / quad
+                diff = ai_old - aj_old
+                ai, aj = ai_old + delta, aj_old + delta
+                if diff > 0.0:
+                    if aj < 0.0:
+                        aj, ai = 0.0, diff
+                elif ai < 0.0:
+                    ai, aj = 0.0, -diff
+                if diff > 0.0:
+                    if ai > C:
+                        ai, aj = C, C - diff
+                elif aj > C:
+                    aj, ai = C, C + diff
+            else:
+                delta = (grad[i] - grad[j]) / quad
+                s = ai_old + aj_old
+                ai, aj = ai_old - delta, aj_old + delta
+                if s > C:
+                    if ai > C:
+                        ai, aj = C, s - C
+                elif aj < 0.0:
+                    aj, ai = 0.0, s
+                if s > C:
+                    if aj > C:
+                        aj, ai = C, s - C
+                elif ai < 0.0:
+                    ai, aj = 0.0, s
+
+            d_ai, d_aj = ai - ai_old, aj - aj_old
+            if d_ai == 0.0 and d_aj == 0.0:
+                break
+            alphas[i], alphas[j] = ai, aj
+            grad += y_sv * ((yi * d_ai) * Ki + (yj * d_aj) * K[j])
+
+        # Bias: rata-rata -y_t*grad_t pada SV bebas; jika tidak ada, titik tengah batasnya
+        yG = y_sv * grad
+        free = (alphas > 0.0) & (alphas < C)
+        if free.any():
+            b = -float(yG[free].mean())
+        else:
+            at_c, at_0 = alphas >= C, alphas <= 0.0
+            ub = min(yG[at_c & neg].min(initial=np.inf), yG[at_0 & pos].min(initial=np.inf))
+            lb = max(yG[at_c & pos].max(initial=-np.inf), yG[at_0 & neg].max(initial=-np.inf))
+            r = 0.5 * (ub + lb) if np.isfinite(ub) and np.isfinite(lb) else 0.0
+            b = -float(r)
+        return alphas, b
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         """
@@ -277,16 +295,20 @@ class SVM(BaseModel):
             qp_idx = np.arange(n_total)
 
         n_sub = len(qp_idx)
+        kdtype = np.dtype(self.kernel_dtype)
         if n_sub > _QP_WARN_SAMPLES:
+            est_gb = n_sub * n_sub * kdtype.itemsize / 1024 ** 3
             warnings.warn(
                 f"Jumlah sampel pelatihan ({n_sub}) melebihi {_QP_WARN_SAMPLES}; "
-                "matriks kernel penuh dapat memakan waktu dan memori lebih besar.",
+                f"matriks kernel penuh ~{est_gb:.2f} GB ({kdtype.name}). "
+                "Pertimbangkan max_samples untuk subsampling berstrata.",
                 RuntimeWarning,
             )
 
         Xq, yq = X[qp_idx], y_pm[qp_idx]
-        K = self._compute_kernel(Xq, Xq)
+        K = self._compute_kernel(Xq, Xq, dtype=kdtype)
         alphas_q, b_val = self._solve_smo(K, yq, rng)
+        del K  # bebaskan matriks Gram sebelum Platt scaling / prediksi
 
         sv_mask = alphas_q > 1e-7
         alphas_full = np.zeros(n_total, dtype=np.float64)
