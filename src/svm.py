@@ -22,16 +22,48 @@ def _sigmoid(z: np.ndarray) -> np.ndarray:
     return out
 
 
+def _laplacian_gram(X1: np.ndarray, X2: np.ndarray, gamma: float, dtype, block_bytes: int = 64 * 1024 * 1024) -> np.ndarray:
+    """
+    Matriks Gram kernel Laplacian: K_ij = exp(-gamma * sum_k |X1_ik - X2_jk|) (jarak L1).
+
+    Dihitung per BLOK baris dan langsung ditulis ke buffer keluaran ber-dtype `dtype`, sehingga
+    puncak memori ~ satu matriks n1 x n2 (+ satu blok ~64 MB), bukan dua matriks float64 penuh.
+    Memakai scipy.cdist('cityblock') bila tersedia; jika tidak, fallback NumPy (loop per fitur).
+    """
+    n1, n2 = X1.shape[0], X2.shape[0]
+    out = np.empty((n1, n2), dtype=dtype)
+    X2_64 = np.ascontiguousarray(X2, dtype=np.float64)
+    rows = max(1, block_bytes // (8 * max(n2, 1)))
+    try:
+        from scipy.spatial.distance import cdist
+    except ImportError:  # pragma: no cover - scipy ada di requirements.txt
+        cdist = None
+
+    for start in range(0, n1, rows):
+        a = np.ascontiguousarray(X1[start:start + rows], dtype=np.float64)
+        if cdist is not None:
+            D = cdist(a, X2_64, "cityblock")
+        else:
+            D = np.zeros((a.shape[0], n2), dtype=np.float64)
+            for k in range(a.shape[1]):
+                D += np.abs(a[:, k:k + 1] - X2_64[:, k][None, :])
+        D *= -gamma
+        np.exp(D, out=D)
+        out[start:start + rows] = D
+    return out
+
+
 class SVM(BaseModel):
     """
     Implementasi Support Vector Machine (SVM) Classifier from Scratch (NumPy).
 
     Parameter:
         C (float): Parameter regularisasi soft-margin.
-        kernel (str): Jenis kernel ('linear', 'poly', 'rbf').
+        kernel (str): Jenis kernel ('linear', 'poly', 'rbf', 'laplacian').
         degree (int): Derajat polinomial untuk kernel 'poly' (default=3).
-        gamma (float | str | None): Koefisien kernel untuk 'poly' dan 'rbf'
-            (jika None atau 'scale', gunakan 1 / (n_features * var); jika 'auto', 1 / n_features).
+        gamma (float | str | None): Koefisien kernel untuk 'poly', 'rbf', dan 'laplacian'
+            (jika None atau 'scale': 1 / (n_features * var) untuk poly/rbf dan
+            1 / (n_features * std) untuk laplacian; jika 'auto': 1 / n_features).
         coef0 (float): Konstanta independen r pada kernel polinomial (default=1.0).
         solver (str): Solver from-scratch ('smo' atau 'cvxopt' untuk kompatibilitas API).
         max_iter (int): Batas iterasi SMO dalam satuan 'putaran' data (maks. max_iter * n pembaruan).
@@ -43,6 +75,8 @@ class SVM(BaseModel):
         kernel_dtype (str): Presisi matriks Gram saat pelatihan ('float32' atau 'float64').
             float32 menghemat memori 2x (n=21k: ~1.8 GB vs ~3.5 GB); variabel dual, bias,
             dan decision_function tetap float64.
+        probability (bool): Jika True (default), fit juga melatih Platt Scaling untuk predict_proba.
+            Set False untuk melewatkannya (mis. saat tuning hiperparameter) agar fit lebih cepat.
     """
 
     def __init__(
@@ -58,13 +92,14 @@ class SVM(BaseModel):
         max_samples: int = None,
         random_state: int = RANDOM_SEED,
         kernel_dtype: str = "float32",
+        probability: bool = True,
         **kwargs,
     ):
         super().__init__(**kwargs)
         if C <= 0:
             raise ValueError("C harus lebih besar dari 0.")
-        if kernel.lower() not in ("linear", "poly", "rbf"):
-            raise ValueError("Kernel harus 'linear', 'poly', atau 'rbf'.")
+        if kernel.lower() not in ("linear", "poly", "rbf", "laplacian"):
+            raise ValueError("Kernel harus 'linear', 'poly', 'rbf', atau 'laplacian'.")
         if solver.lower() not in ("smo", "cvxopt"):
             raise ValueError("Solver harus 'smo' atau 'cvxopt'.")
         if max_samples is not None and max_samples < 2:
@@ -83,6 +118,7 @@ class SVM(BaseModel):
         self.max_samples = max_samples
         self.random_state = int(random_state)
         self.kernel_dtype = kernel_dtype
+        self.probability = bool(probability)
 
         # Parameter hasil pelatihan
         self.alphas_ = None                    # alpha untuk SELURUH data latih
@@ -104,9 +140,12 @@ class SVM(BaseModel):
         n_features = max(X.shape[1], 1)
         if self.gamma == "auto":
             return 1.0 / n_features
-        # Default ('scale' atau None): 1 / (n_features * var) dengan fallback aman
+        # Default ('scale' atau None) dengan fallback aman:
+        #   poly/rbf  : 1 / (n_features * var)   (jarak kuadrat ~ var)
+        #   laplacian : 1 / (n_features * std)   (jarak L1 ~ std)
         var = float(np.var(X))
-        denom = n_features * var
+        scale = np.sqrt(var) if self.kernel == "laplacian" else var
+        denom = n_features * scale
         return 1.0 / denom if denom > 0.0 else 1.0 / n_features
 
     # ------------------------------------------------------------------ kernel
@@ -116,15 +155,20 @@ class SVM(BaseModel):
         1. Linear: K(x, x') = x^T x'
         2. Polynomial: K(x, x') = (gamma * x^T x' + coef0)^degree
         3. Gaussian (RBF): K(x, x') = exp(-gamma * ||x - x'||^2)
+        4. Laplacian: K(x, x') = exp(-gamma * ||x - x'||_1)  (jarak L1, lebih tahan terhadap
+           fitur ber-skala besar/berekor panjang dibanding RBF)
 
         Semua operasi setelah perkalian matriks dilakukan IN-PLACE pada satu buffer,
         sehingga puncak memori hanya satu matriks (bukan 3-4 temporary berukuran n x n).
         """
-        X1 = np.asarray(X1, dtype=dtype)
-        X2 = np.asarray(X2, dtype=dtype)
         gamma = self._gamma_
         if gamma is None:
-            gamma = self._resolve_gamma(X1)
+            gamma = self._resolve_gamma(np.asarray(X1))
+        if self.kernel == "laplacian":
+            return _laplacian_gram(np.asarray(X1), np.asarray(X2), gamma, dtype)
+
+        X1 = np.asarray(X1, dtype=dtype)
+        X2 = np.asarray(X2, dtype=dtype)
 
         G = X1 @ X2.T
         if self.kernel == "linear":
@@ -324,8 +368,9 @@ class SVM(BaseModel):
         self.classes_ = np.array([0, 1])
         self.is_fitted = True
 
-        scores = self.decision_function(X)
-        self.platt_A_, self.platt_B_ = self._fit_platt(scores, y_pm)
+        if self.probability:
+            scores = self.decision_function(X)
+            self.platt_A_, self.platt_B_ = self._fit_platt(scores, y_pm)
         return self
 
     # ------------------------------------------------------------- Platt scaling
@@ -382,6 +427,8 @@ class SVM(BaseModel):
         Menghasilkan probabilitas posterior [P(y=0|X), P(y=1|X)] menggunakan Platt Scaling:
         P(y=1|x) = 1 / (1 + exp(A * f(x) + B))
         """
+        if not self.probability:
+            raise ValueError("predict_proba membutuhkan probability=True saat membuat model.")
         f = self.decision_function(X)
         p1 = _sigmoid(-(self.platt_A_ * f + self.platt_B_))
         return np.column_stack([1.0 - p1, p1])
