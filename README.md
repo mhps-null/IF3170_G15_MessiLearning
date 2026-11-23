@@ -11,7 +11,7 @@ Implementasi algoritma **Supervised Learning *from Scratch*** (KNN, Decision Tre
 | :---: | :--- | :--- |
 | **13524042** | Data Engineering Pipeline (`src/preprocessing.py`) & KNN (`src/knn.py`) | `feat/anggota1-knn-pipeline` |
 | **13524053** | Decision Tree Learning — **C4.5 *from Scratch*** (`src/dtl.py`), Bonus Visualisasi Top-$N$ Tree (`export_tree_visualization`), & Bonus Optimasi DTL (**PSO + Histogram Quantile Split $B=64$ + Minimal Cost-Complexity Weakest-Link Pruning Path**, ablasi Surrogate Splits) | `feat/anggota2-dtl-integration` |
-| **13524060** | Logistic Regression (`src/logistic_regression.py`), Adam Optimizer & Loss Contour Video | `feat/anggota3-logreg` |
+| **13524060** | Logistic Regression NumPy (`src/logistic_regression.py`), FISTA dengan backtracking, dan video kontur | `feat/logistic-regression` |
 | **13524057** | Support Vector Machine (`src/svm.py`), SMO/Pegasos & 2D Margin Plotter | `feat/anggota4-svm` |
 | **13524063** | Naive Bayes & TAN (`src/naive_bayes.py`), BN DAG Visualizer & Cost-Sensitive Classification | `feat/anggota5-nb-cost` |
 
@@ -49,7 +49,8 @@ IF3170_G15_MessiLearning/
 │   ├── preprocessing.py                      # Pipeline pemrosesan data bebas leakage & dual-export (Anggota 1)
 │   ├── knn.py                                # KNN from scratch (Anggota 1)
 │   ├── dtl.py                                # DTL C4.5 from scratch, PSO + Hist + Minimal CCP, & Top-N visualizer (Anggota 2)
-│   ├── logistic_regression.py                # Logistic Regression & video maker (Anggota 3)
+│   ├── logistic_regression.py                # Logistic Regression NumPy dengan FISTA (Anggota 3)
+│   ├── logistic_contour.py                   # Video kontur dan lintasan FISTA (Anggota 3)
 │   ├── svm.py                                # SVM with Kernels & 2D margin plotter (Anggota 4)
 │   └── naive_bayes.py                        # Naive Bayes / TAN & DAG visualizer (Anggota 5)
 ├── FOUNDATION.md                             # Dokumen kontrak teknis & arsitektur tim
@@ -73,6 +74,16 @@ Modul [`src/dtl.py`](src/dtl.py) diimplementasikan **100% pure NumPy** (tanpa im
   - Dilatih pada 100% `train.csv` terdeduplikasi (`27.309` baris) menggunakan 1 pohon C4.5 tunggal (361 nodes, depth 18) dengan kalibrasi *threshold* jujur berbasis 5-Fold Out-Of-Fold CV (`th = 0.415`, OOF Macro F1 meningkat di 5/5 fold: `0.82127` → `0.82954`, *Train-Val gap* `0.0141`).
   - Skor **Public Leaderboard Kaggle: `0.83701`** (SHA-256 terverifikasi *byte-for-byte*: `c5565c01cc742184e25b2aa0cc4c406cc4accfc4a0dbe385513dbf0eb8adac7c`).
 - **Bonus #2 Visualisasi Top-$N$ Tree**: Dihasilkan melalui `export_tree_visualization(model, top_n=3, ...)` ke [`output/plots/dtl_tree_top_n.png`](output/plots/dtl_tree_top_n.png).
+
+---
+
+### Logistic Regression — Anggota 3 (`13524060`)
+
+Bagian **Logistic Regression** pada notebook terintegrasi menjalankan baseline L1, tuning penalti dan ambang pada inner holdout, evaluasi resmi, serta komparasi SAGA. Konfigurasi terpilih adalah Elastic Net dengan `C=1`, `l1_ratio=0.5`, dan ambang 0,45. Pada validasi resmi, Macro F1 adalah 0,77222, dengan baseline 0,76243. FISTA dan SAGA menghasilkan label yang sama pada 5.462 baris. [Notebook terintegrasi](notebooks/Copy_of_Notebook_Template_Tugas_Besar_2_IF3170_Inteligensi_Artifisial_2026_2027.ipynb#logistic-regression) · [Ringkasan eksperimen](notebooks/02_model_experiments.ipynb#3-logistic-regression--anggota-3-13524060)
+
+Jalankan sel persiapan data dan bagian LR secara berurutan. Sel **Save & Load** membuat `output/models/logistic_regression_tuned.pkl` yang berisi estimator, transformer, dan ambang. Sel **Kaggle Submission** menghasilkan `output/submissions/submission_logistic_regression_tuned.csv`. Bundle diverifikasi dengan Python 3.12 dan scikit-learn 1.6.1. Gunakan lingkungan yang sesuai saat memuatnya. Video memperlihatkan lintasan fit demonstrasi L1 dengan satu fitur, `days_before_arrival`. [Video kontur](output/videos/logreg_loss_contour.mp4)
+
+Rujukan pelatihan dan pembanding. [Beck dan Teboulle (2009), FISTA dan backtracking](https://doi.org/10.1137/080716542) · [Objektif biner scikit-learn](https://scikit-learn.org/1.6/modules/linear_model.html#binary-case) · [Defazio, Bach, dan Lacoste-Julien (2014), SAGA](https://arxiv.org/abs/1407.0202)
 
 ---
 
