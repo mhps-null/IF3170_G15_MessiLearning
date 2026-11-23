@@ -6,7 +6,6 @@ Menginduk pada BaseModel dan mendukung metrik jarak Euclidean dan Manhattan.
 
 import numpy as np
 from .base import BaseModel
-from collections import Counter
 
 
 class KNN(BaseModel):
@@ -31,23 +30,19 @@ class KNN(BaseModel):
 
     def _compute_distances(self, X: np.ndarray) -> np.ndarray:
         """
-        Menghitung matriks jarak antara setiap sampel di X dengan seluruh sampel di X_train_.
+        Menghitung matriks jarak antara setiap sampel di X dengan seluruh sampel di X_train_ menggunakan NumPy broadcasting.
         - Euclidean: d(x, x') = sqrt(sum((x_i - x'_i)^2))
         - Manhattan: d(x, x') = sum(|x_i - x'_i|)
+        Mengembalikan np.ndarray: Matriks jarak berukuran (n_samples, n_train).
         """
-   
-        distances = np.zeros((len(X), len(self.X_train_)))    #inisiasi matriks hasil 
+        
+        differences = X[:, np.newaxis, :] - self.X_train_[np.newaxis, :, :]   
 
-        for i in range(len(X)):
-            for j in range(len(self.X_train_)):
+        if self.metric == "euclidean":
+            distances = np.sqrt(np.sum(differences**2, axis=2))
 
-                if self.metric == "euclidean":
-                    distance = np.sqrt(np.sum((X[i]-self.X_train_[j])**2))
-                elif self.metric == "manhattan":
-                    distance = np.sum(np.abs(X[i]-self.X_train_[j]))
-                else:
-                    raise ValueError("Metric harus 'euclidean' atau 'manhattan'.")
-                distances[i, j] = distance
+        else:  #self.metric == "manhattan"
+            distances = np.sum(np.abs(differences), axis=2)
 
         return distances
 
@@ -80,23 +75,18 @@ class KNN(BaseModel):
         X = np.asarray(X, dtype=float)
 
         distances = self._compute_distances(X)
-        probabilities = []
 
-        # Tentukan label untuk setiap data test
-        for i in range(len(X)):
-            sorted_distance_indices = np.argsort(distances[i])
+        # Untuk setiap data uji: urut indeks data training, ambil indeks dan label k tetangga terdekat, hitung probabilitas
+        sorted_distance_indices = np.argsort(distances, axis=1)
 
-            top_k_indices = sorted_distance_indices[:self.k]
+        top_k_indices = sorted_distance_indices[:, :self.k]
 
-            top_k_labels = self.y_train_[top_k_indices]
+        top_k_labels = self.y_train_[top_k_indices]
 
-            # Hitung probabilitas
-            prob_class_1 = np.sum(top_k_labels == 1) / self.k
-            prob_class_0 = 1 - prob_class_1
+        prob_class_1 = np.mean(top_k_labels == 1, axis=1) 
+        prob_class_0 = 1 - prob_class_1
 
-            probabilities.append([prob_class_0, prob_class_1])
-
-        return np.array(probabilities)
+        return np.column_stack((prob_class_0, prob_class_1))
 
 
     def predict(self, X: np.ndarray) -> np.ndarray:
