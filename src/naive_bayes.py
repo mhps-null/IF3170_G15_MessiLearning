@@ -663,8 +663,16 @@ class _GaussianNaiveBayesBase(BaseModel):
 
     @classmethod
     def load(cls, filepath):
+        class _NumpyCompatUnpickler(pickle.Unpickler):
+            """Dukung pemuatan model lintas versi NumPy 1.x <-> 2.x."""
+
+            def find_class(self, module, name):
+                if module.startswith("numpy._core"):
+                    module = module.replace("numpy._core", "numpy.core", 1)
+                return super().find_class(module, name)
+
         with open(filepath, "rb") as file:
-            model = pickle.load(file)
+            model = _NumpyCompatUnpickler(file).load()
         if not isinstance(model, cls):
             raise TypeError("Invalid NaiveBayes model.")
         model._check_fitted()
@@ -1199,65 +1207,117 @@ def export_bayesian_network_graph(
     model,
     feature_names=None,
     target_name="is_canceled (Y)",
-    output_path="output/plots/bayesian_network_graph.png"
+    output_path="output/plots/bayesian_network_graph.png",
+    max_nodes=14,
 ):
     """
-    Visualize the Gaussian Naive Bayes DAG.
+    Visualize the Gaussian Naive Bayes / Weighted Naive Bayes DAG.
 
-    Each selected transformed feature is a child
-    of the target class.
-
-    This is a Naive Bayes graph, not TAN.
+    Each selected (or top-weighted active) transformed feature is a child
+    of the target class Y -> X_j. For weighted models with many candidate
+    interaction groups, displays the top `max_nodes` active features ranked
+    by learned discriminative weight w_j so labels remain legible.
     """
     import matplotlib.pyplot as plt
     import networkx as nx
     import textwrap
     model._check_fitted()
+    weights = getattr(model, "feature_weights_", None)
     if feature_names is None:
-        feature_names = model.feature_names_
-    feature_names = list(feature_names)
-    if len(feature_names) != model.n_features_in_:
-        raise ValueError("Invalid number of feature names.")
+        all_names = list(model.feature_names_)
+        if weights is not None and len(all_names) > max_nodes:
+            w_arr = np.asarray(weights, dtype=float)
+            active_idx = np.flatnonzero(w_arr > 1e-8)
+            if len(active_idx) == 0:
+                active_idx = np.arange(len(all_names))
+            order = active_idx[np.argsort(-w_arr[active_idx])][:max_nodes]
+            selected_items = [(all_names[i], float(w_arr[i])) for i in order]
+            total_active = int(len(active_idx))
+        else:
+            if weights is not None:
+                selected_items = [(n, float(w)) for n, w in zip(all_names, weights)]
+            else:
+                selected_items = [(n, 1.0) for n in all_names]
+            total_active = len(selected_items)
+    else:
+        feature_names = list(feature_names)
+        if len(feature_names) != model.n_features_in_:
+            raise ValueError("Invalid number of feature names.")
+        if weights is not None:
+            selected_items = [(n, float(w)) for n, w in zip(feature_names, weights)][:max_nodes]
+        else:
+            selected_items = [(n, 1.0) for n in feature_names[:max_nodes]]
+        total_active = len(feature_names)
+
     graph = nx.DiGraph()
     target_node = "target"
     graph.add_node(target_node)
     labels = {target_node: target_name}
     feature_nodes = []
-    for j, name in enumerate(feature_names):
+    edge_widths = []
+    w_max = max((w for _, w in selected_items), default=1.0) or 1.0
+
+    for j, (name, w_val) in enumerate(selected_items):
         node = f"feature_{j}"
-        graph.add_edge(target_node, node)
+        graph.add_edge(target_node, node, weight=w_val)
         feature_nodes.append(node)
-        labels[node] = textwrap.fill(str(name), width=22)
+        wrapped = textwrap.fill(str(name), width=20)
+        if weights is not None and getattr(model, "optimization_stage", 0) > 0:
+            labels[node] = f"{wrapped}\n(w={w_val:.3f})"
+        else:
+            labels[node] = wrapped
+        edge_widths.append(1.2 + 2.6 * (w_val / w_max))
+
     n_features = len(feature_nodes)
-    positions = {target_node: (0, 0)}
+    positions = {target_node: (0.0, 0.0)}
     angles = np.linspace(np.pi / 2, np.pi / 2 + 2 * np.pi, n_features, endpoint=False)
     for node, angle in zip(feature_nodes, angles):
-        positions[node] = (3.0 * np.cos(angle), 3.0 * np.sin(angle))
-    fig, ax = plt.subplots(figsize=(14, 11))
+        positions[node] = (3.4 * np.cos(angle), 2.8 * np.sin(angle))
+
+    fig, ax = plt.subplots(figsize=(15, 11))
     nx.draw_networkx_nodes(
         graph,
         positions,
         nodelist=[target_node],
         node_color="#F59E0B",
-        node_size=5500,
-        ax=ax
+        edgecolors="#92400E",
+        linewidths=2.0,
+        node_size=5800,
+        ax=ax,
     )
     nx.draw_networkx_nodes(
         graph,
         positions,
         nodelist=feature_nodes,
-        node_color="#93C5FD",
-        node_size=5000,
-        ax=ax
+        node_color="#DBEAFE",
+        edgecolors="#1D4ED8",
+        linewidths=1.5,
+        node_size=5400,
+        ax=ax,
     )
-    nx.draw_networkx_edges(graph, positions, arrows=True, arrowsize=22, width=1.8, node_size=5000, ax=ax)
-    nx.draw_networkx_labels(graph, positions, labels=labels, font_size=9, ax=ax)
-    ax.set_title("Gaussian Naive Bayes - Bayesian Network", fontsize=17, fontweight="bold")
-    ax.margins(0.2)
+    nx.draw_networkx_edges(
+        graph,
+        positions,
+        arrows=True,
+        arrowsize=20,
+        width=edge_widths,
+        edge_color="#334155",
+        node_size=5400,
+        ax=ax,
+    )
+    nx.draw_networkx_labels(graph, positions, labels=labels, font_size=8.5, font_weight="bold", ax=ax)
+    stage_lbl = getattr(model, "optimization_stage", 0)
+    subtitle = (
+        f"Top-{n_features} dari {total_active} Fitur Aktif (Stage E{stage_lbl}: Weighted Gaussian NB + Adaptive OOF Encoding)"
+        if stage_lbl > 0 and total_active > n_features
+        else f"{n_features} Fitur Terpilih (Gaussian Naive Bayes)"
+    )
+    ax.set_title(f"Struktur Graf Bayesian Network (Naive Bayes)\n{subtitle}", fontsize=14, fontweight="bold")
+    ax.margins(0.18)
     ax.axis("off")
     fig.tight_layout()
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close(fig)
     print(f"[Graph Saved] {output_path}")
     return graph
