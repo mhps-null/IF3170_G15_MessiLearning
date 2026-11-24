@@ -27,20 +27,13 @@ IF3170_G15_MessiLearning/
 ├── docs/
 │   └── Laporan_Tubes2_G15.pdf                # Laporan akhir kelompok (format PDF)
 ├── notebooks/
-│   ├── 01_eda_preprocessing.ipynb            # Notebook EDA & Data Preparation (Anggota 1)
-│   ├── 02_model_experiments.ipynb            # Notebook eksperimen & komparasi 5 model (Kolektif)
-│   ├── 03_cost_sensitive.ipynb               # Notebook analisis cost-sensitive (Anggota 5)
-│   ├── main_reproducible.ipynb               # Ringkasan skrip notebook reproducible
-│   └── Copy_of_Notebook_Template_Tugas_Besar_2_IF3170_Inteligensi_Artifisial_2026_2027.ipynb
-│                                             # Notebook template resmi terintegrasi (Anggota 1 + Anggota 2)
+│   └── IF3170_G15_MessiLearning.ipynb        # Notebook utama terpusat & reproducible (EDA, 5 model, bonus, & Kaggle)
 ├── output/
-│   ├── models/
-│   │   └── dtl_model.pkl                     # Model C4.5 pemenang tersimpan (Opsi A1: 415 nodes, depth 18)
-│   ├── plots/
-│   │   └── dtl_tree_top_n.png                # Bonus #2: Visualisasi Top-3 percabangan pohon C4.5
-│   ├── videos/                               # Video lintasan kontur loss Logistic Regression (.mp4/.gif)
-│   └── submissions/
-│       └── submission_dtl_opsi_a1.csv        # Submisi reproducible DTL C4.5 (Kaggle Public LB: 0.83701)
+│   ├── models/                               # Model terlatih (.pkl): knn, dtl, logistic_regression, svm
+│   ├── plots/                                # Visualisasi bonus & evaluasi (DTL Top-3, KNN, SVM 2D)
+│   ├── videos/
+│   │   └── logreg_loss_contour.mp4           # Bonus: Video lintasan kontur loss Logistic Regression
+│   └── submissions/                          # Berkas submisi reproducible Kaggle (.csv)
 ├── src/
 │   ├── __init__.py
 │   ├── base.py                               # [FONDASI] Abstract Base Class (BaseModel: fit/predict/save/load)
@@ -99,7 +92,7 @@ Modul [`src/dtl.py`](src/dtl.py) diimplementasikan **100% pure NumPy** (tanpa im
 
 4. **Menjalankan Notebook Reproducible (Lokal):**
    - Pastikan kernel Jupyter / VS Code mengarah ke `venv` di atas dan direktori kerja berada di dalam repositori `IF3170_G15_MessiLearning/`.
-   - Buka [`notebooks/Copy_of_Notebook_Template_Tugas_Besar_2_IF3170_Inteligensi_Artifisial_2026_2027.ipynb`](notebooks/Copy_of_Notebook_Template_Tugas_Besar_2_IF3170_Inteligensi_Artifisial_2026_2027.ipynb) (atau [`notebooks/02_model_experiments.ipynb`](notebooks/02_model_experiments.ipynb) untuk eksperimen DTL mandiri) lalu pilih **Kernel → Restart Kernel and Run All Cells**.
+   - Buka [`notebooks/IF3170_G15_MessiLearning.ipynb`](notebooks/IF3170_G15_MessiLearning.ipynb) lalu pilih **Kernel → Restart Kernel and Run All Cells**.
 
 5. **Menjalankan Notebook di Google Colab:**
-   - Buka sel **Environment Setup (`#14`)** pada notebook template, *uncomment* perintah `!git clone https://github.com/mhps-null/IF3170_G15_MessiLearning.git` dan `%cd IF3170_G15_MessiLearning` (atau *mount* Google Drive yang berisi repositori di `/content/drive/MyDrive/IF3170_G15_MessiLearning`), lalu pilih **Runtime → Run all**.
+   - Buka sel **Environment Setup (`#14`)** pada [`notebooks/IF3170_G15_MessiLearning.ipynb`](notebooks/IF3170_G15_MessiLearning.ipynb), *uncomment* perintah `!git clone https://github.com/mhps-null/IF3170_G15_MessiLearning.git` dan `%cd IF3170_G15_MessiLearning` (atau *mount* Google Drive yang berisi repositori di `/content/drive/MyDrive/IF3170_G15_MessiLearning`), lalu pilih **Runtime → Run all**.
