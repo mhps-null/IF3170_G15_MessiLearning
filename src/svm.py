@@ -1,3 +1,21 @@
+"""
+src/svm.py
+Implementasi Support Vector Machine (SVM) Classifier from Scratch (100% Pure NumPy).
+
+Referensi Utama:
+1. C. Cortes and V. Vapnik, "Support-vector networks," Machine Learning,
+   vol. 20, no. 3, pp. 273-297, 1995, doi: 10.1007/BF00994018.
+2. J. C. Platt, "Sequential minimal optimization: A fast algorithm for training
+   support vector machines," Microsoft Research, Tech. Rep. MSR-TR-98-14, 1998.
+3. R.-E. Fan, P.-H. Chen, and C.-J. Lin, "Working set selection using second order
+   information for training support vector machines," Journal of Machine Learning
+   Research, vol. 6, pp. 1889-1918, 2005.
+4. H.-T. Lin, C.-J. Lin, and R. C. Weng, "A note on Platt's probabilistic outputs
+   for support vector machines," Machine Learning, vol. 68, no. 3, pp. 267-276, 2007.
+5. M. G. Genton, "Classes of kernels for machine learning: A statistics perspective,"
+   Journal of Machine Learning Research, vol. 2, pp. 299-312, 2001.
+"""
+
 import os
 import warnings
 import numpy as np
@@ -24,30 +42,29 @@ def _sigmoid(z: np.ndarray) -> np.ndarray:
 
 def _laplacian_gram(X1: np.ndarray, X2: np.ndarray, gamma: float, dtype, block_bytes: int = 64 * 1024 * 1024) -> np.ndarray:
     """
-    Matriks Gram kernel Laplacian: K_ij = exp(-gamma * sum_k |X1_ik - X2_jk|) (jarak L1).
+    Matriks Gram kernel Laplacian (Genton, 2001):
+        K_ij = exp(-gamma * sum_k |X1_ik - X2_jk|)  (jarak L1 / Manhattan).
 
-    Dihitung per BLOK baris dan langsung ditulis ke buffer keluaran ber-dtype `dtype`, sehingga
-    puncak memori ~ satu matriks n1 x n2 (+ satu blok ~64 MB), bukan dua matriks float64 penuh.
-    Memakai scipy.cdist('cityblock') bila tersedia; jika tidak, fallback NumPy (loop per fitur).
+    Dihitung 100% menggunakan operasi NumPy murni per BLOK baris dengan pemakaian ulang
+    buffer sementara (tanpa impor scipy), lalu langsung ditulis ke buffer keluaran
+    ber-dtype `dtype` sehingga puncak memori ~ satu matriks n1 x n2 (+ blok ~64 MB).
     """
     n1, n2 = X1.shape[0], X2.shape[0]
+    work_dtype = np.float32 if np.dtype(dtype) == np.float32 else np.float64
     out = np.empty((n1, n2), dtype=dtype)
-    X2_64 = np.ascontiguousarray(X2, dtype=np.float64)
-    rows = max(1, block_bytes // (8 * max(n2, 1)))
-    try:
-        from scipy.spatial.distance import cdist
-    except ImportError:  # pragma: no cover - scipy ada di requirements.txt
-        cdist = None
+    X2_w = np.ascontiguousarray(X2, dtype=work_dtype)
+    rows = max(1, block_bytes // (np.dtype(work_dtype).itemsize * max(n2, 1)))
+    neg_gamma = work_dtype(-gamma)
 
     for start in range(0, n1, rows):
-        a = np.ascontiguousarray(X1[start:start + rows], dtype=np.float64)
-        if cdist is not None:
-            D = cdist(a, X2_64, "cityblock")
-        else:
-            D = np.zeros((a.shape[0], n2), dtype=np.float64)
-            for k in range(a.shape[1]):
-                D += np.abs(a[:, k:k + 1] - X2_64[:, k][None, :])
-        D *= -gamma
+        a = np.ascontiguousarray(X1[start:start + rows], dtype=work_dtype)
+        D = np.zeros((a.shape[0], n2), dtype=work_dtype)
+        tmp = np.empty_like(D)
+        for k in range(a.shape[1]):
+            np.subtract(a[:, k:k + 1], X2_w[:, k][None, :], out=tmp)
+            np.abs(tmp, out=tmp)
+            D += tmp
+        D *= neg_gamma
         np.exp(D, out=D)
         out[start:start + rows] = D
     return out

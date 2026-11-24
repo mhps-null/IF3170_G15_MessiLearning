@@ -1,19 +1,19 @@
 # IF3170_G15_MessiLearning
 ## Tugas Besar 2 IF3170 Inteligensi Artifisial (Semester I 2026/2027)
 
-Implementasi algoritma **Supervised Learning *from Scratch*** (KNN, Decision Tree Learning, Logistic Regression, Support Vector Machine, dan Naive Bayes / TAN) beserta pipeline pemrosesan data bebas *leakage* dan evaluasi *Cost-Sensitive Classification* untuk prediksi pembatalan pemesanan penginapan (`is_canceled`, metrik evaluasi resmi kompetisi Kaggle: **Macro F1-Score**).
+Implementasi terpadu lima algoritma **Supervised Learning *from Scratch*** (**KNN**, **Decision Tree Learning C4.5**, **Logistic Regression FISTA**, **Support Vector Machine SMO**, dan **Bayesian Network / Weighted Gaussian Naive Bayes**) beserta *pipeline* pemrosesan data bebas *data leakage*, komparasi `scikit-learn`, optimasi model lanjutan, dan evaluasi *Cost-Sensitive Classification* untuk memprediksi pembatalan pemesanan penginapan (`is_canceled`, metrik evaluasi resmi kompetisi Kaggle: **Macro F1-Score**).
 
 ---
 
 ### Anggota Kelompok G15 — MessiLearning
 
-| NIM | Peran & Modul Tanggung Jawab | Branch Kerja |
+| NIM | Nama | Peran & Modul Tanggung Jawab |
 | :---: | :--- | :--- |
-| **13524042** | Data Engineering Pipeline (`src/preprocessing.py`) & KNN (`src/knn.py`) | `feat/anggota1-knn-pipeline` |
-| **13524053** | Decision Tree Learning — **C4.5 *from Scratch*** (`src/dtl.py`), Bonus Visualisasi Top-$N$ Tree (`export_tree_visualization`), & Bonus Optimasi DTL (**PSO + Histogram Quantile Split $B=64$ + Minimal Cost-Complexity Weakest-Link Pruning Path**, ablasi Surrogate Splits) | `feat/anggota2-dtl-integration` |
-| **13524060** | Logistic Regression NumPy (`src/logistic_regression.py`), FISTA dengan backtracking, dan video kontur | `feat/logistic-regression` |
-| **13524057** | Support Vector Machine (`src/svm.py`), SMO & 2D Margin Plotter | `feat/anggota4-svm` |
-| **13524063** | Naive Bayes & TAN (`src/naive_bayes.py`), BN DAG Visualizer & Cost-Sensitive Classification | `feat/anggota5-nb-cost` |
+| **13524042** | Suryani Mulia Utami | EDA, *Data Engineering Pipeline* bebas *leakage* (`src/preprocessing.py`), implementasi **KNN *from Scratch*** (`src/knn.py`), komparasi `KNeighborsClassifier`, dan submisi Kaggle KNN (`submission_knn.csv`) |
+| **13524053** | Muhammad Haris Putra Sulastianto | Implementasi **DTL C4.5 *from Scratch*** (`src/dtl.py`), Bonus Visualisasi Top-$N$ Tree (`export_tree_visualization`), Bonus Optimasi DTL (**PSO + Histogram Quantile Split $B=64$ + Minimal Cost-Complexity Weakest-Link Pruning Path**, ablasi *Surrogate Splits*), konsolidasi notebook terpusat, dan submisi final Kaggle DTL (`submission_dtl_opsi_a1.csv`) |
+| **13524057** | Benedict Darrel Setiawan | Implementasi **SVM *from Scratch*** (solver dual SMO orde-dua, kernel Linear/Poly/Gaussian/Laplacian, *Platt scaling*, `src/svm.py` & `src/svm_tuning.py`), Bonus Visualisasi Margin 2D (`plot_svm_margin_2d`), Bonus Optimasi SVM (Kernel Laplacian + 5-Fold Stratified CV), dan submisi final Kaggle SVM (`submission_svm_improved.csv`) |
+| **13524060** | Steven Tan | Implementasi **Logistic Regression *from Scratch*** (regularisasi L1, L2, Elastic Net & `BookingFeatureTransformer` pada `src/logistic_regression.py`), Bonus Optimasi **FISTA dengan *backtracking***, Bonus Video Kontur Loss (`src/logistic_contour.py`), dan submisi final Kaggle (`submission_logistic_regression.csv`) |
+| **13524063** | Marcel Luther Sitorus | Implementasi **Gaussian Naive Bayes *from Scratch*** (`src/naive_bayes.py`), Bonus Optimasi Naive Bayes (**Weighted Gaussian NB** via *Projected Adam* + **Adaptive Out-of-Fold Smoothed Target Encoding**), Bonus Visualisasi DAG (`export_bayesian_network_graph`), evaluasi **Bonus Cost-Sensitive Classification**, dan submisi Kaggle (`submission_nb.csv`) |
 
 ---
 
@@ -23,50 +23,45 @@ Implementasi algoritma **Supervised Learning *from Scratch*** (KNN, Decision Tre
 IF3170_G15_MessiLearning/
 ├── data/
 │   ├── raw/                                  # Dataset mentah Kaggle (train.csv, test.csv, sample_submission.csv)
-│   └── processed/                            # Output pipeline Anggota 1 (clean, clean_pca, & khusus DTL)
+│   └── processed/                            # Output pipeline bebas leakage (clean, clean_pca, & khusus DTL/NB)
 ├── docs/
 │   └── Laporan_Tubes2_G15.pdf                # Laporan akhir kelompok (format PDF)
 ├── notebooks/
-│   └── IF3170_G15_MessiLearning.ipynb        # Notebook utama terpusat & reproducible (EDA, 5 model, bonus, & Kaggle)
+│   └── IF3170_G15_MessiLearning.ipynb        # Satu-satunya notebook eksperimen terpusat & reproducible (#1 s.d. #12)
 ├── output/
-│   ├── models/                               # Model terlatih (.pkl): knn, dtl, logistic_regression, svm
-│   ├── plots/                                # Visualisasi bonus & evaluasi (DTL Top-3, KNN, SVM 2D)
+│   ├── models/                               # Model terlatih (.pkl): knn, dtl, logistic_regression, svm, naive_bayes
+│   ├── plots/                                # Visualisasi evaluasi & bonus (DTL Top-3, SVM 2D, BN DAG, Cost-Sensitive)
 │   ├── videos/
-│   │   └── logreg_loss_contour.mp4           # Bonus: Video lintasan kontur loss Logistic Regression
+│   │   └── logreg_loss_contour.mp4           # Bonus #3: Video lintasan kontur loss Logistic Regression
 │   └── submissions/                          # Berkas submisi reproducible Kaggle (.csv)
 ├── src/
 │   ├── __init__.py
-│   ├── base.py                               # [FONDASI] Abstract Base Class (BaseModel: fit/predict/save/load)
-│   ├── utils.py                              # [FONDASI] Metrik evaluasi, K-Fold CV manual, & fungsi biaya custom
-│   ├── dummy_generator.py                    # [FONDASI] Generator dataset sintetis untuk pengujian paralel
-│   ├── preprocessing.py                      # Pipeline pemrosesan data bebas leakage & dual-export (Anggota 1)
-│   ├── knn.py                                # KNN from scratch (Anggota 1)
-│   ├── dtl.py                                # DTL C4.5 from scratch, PSO + Hist + Minimal CCP, & Top-N visualizer (Anggota 2)
-│   ├── logistic_regression.py                # Logistic Regression NumPy dengan FISTA (Anggota 3)
-│   ├── logistic_contour.py                   # Video kontur dan lintasan FISTA (Anggota 3)
-│   ├── svm.py                                # SVM with Kernels & 2D margin plotter (Anggota 4)
-│   └── naive_bayes.py                        # Naive Bayes / TAN & DAG visualizer (Anggota 5)
-├── FOUNDATION.md                             # Dokumen kontrak teknis & arsitektur tim
+│   ├── base.py                               # Abstract Base Class (BaseModel: fit/predict/predict_proba/save/load)
+│   ├── utils.py                              # Metrik evaluasi from scratch, K-Fold CV manual, & fungsi biaya 2*FP + FN
+│   ├── dummy_generator.py                    # Generator dataset sintetis untuk uji unit mandiri
+│   ├── preprocessing.py                      # DataPipeline bebas leakage (standar, PCA, & jalur khusus DTL)
+│   ├── knn.py                                # KNN from scratch — Euclidean & Manhattan (Anggota 1)
+│   ├── dtl.py                                # DTL C4.5 from scratch, PSO + Hist + CCP, & Top-N visualizer (Anggota 2)
+│   ├── logistic_regression.py                # Logistic Regression FISTA (L1/L2/Elastic Net) & Transformer (Anggota 3)
+│   ├── logistic_contour.py                   # Generator animasi kontur loss & lintasan FISTA (Anggota 3)
+│   ├── svm.py                                # SVM SMO orde-dua, Platt scaling, 4 kernel & 2D margin plotter (Anggota 4)
+│   ├── svm_tuning.py                         # Pencarian hyperparameter SVM 5-Fold Stratified CV murni NumPy (Anggota 4)
+│   └── naive_bayes.py                        # Weighted Gaussian NB, Adaptive OOF Encoding, DAG & Cost-Sensitive (Anggota 5)
 ├── requirements.txt                          # Daftar dependensi pustaka Python
 └── README.md                                 # Dokumentasi utama repositori
 ```
 
 ---
 
-### Ringkasan Hasil & Reproduksibilitas Modul DTL - Anggota 2 (`13524053`)
+### Ringkasan Performa Validasi Resmi (`5.462` Baris Holdout, `SEED = 42`) & Submisi Final Kaggle
 
-Modul [`src/dtl.py`](src/dtl.py) diimplementasikan **100% pure NumPy** (tanpa impor `scikit-learn` maupun `scipy`) dalam bentuk **1 pohon keputusan tunggal (non-ensemble)** berbasis varian **C4.5** (*Gain Ratio* + *above-average gain*, *multi-way categorical split*, penanganan `NaN` asli Quinlan):
-
-- **Validasi Holdout Resmi (`val_dtl.csv`, 5.462 baris, bebas *leakage*)**:
-  - *Baseline Kuliah* C4.5 Exact + REP (Materi 10c): Val Macro F1 **`0.8186`**, Cost `1.136`, `364` nodes.
-  - **Model Pemenang Bonus #6 (Opsi A1 — PSO + Histogram Quantile $B=64$ + Minimal Cost-Complexity Weakest-Link Pruning Path)**: **Val Macro F1 `0.8259`**, Accuracy **`85.34%`**, Precision **`0.8285`**, Cost **`1.059`**, `415` nodes, Depth `18`.
-  - **Uji McNemar vs Baseline REP**: $b=123, c=162, \chi^2=5.0667, p=0.02439 < 0.05$ (peningkatan signifikan secara statistik).
-  - **Komparasi `scikit-learn` (`val_clean.csv`, 5.462 ID identik)**: Mengungguli `DecisionTreeClassifier(criterion='entropy', ccp_alpha=0.000302)` (`Val Macro F1 = 0.8221`, Cost `1.159`, `643` nodes) dan `ccp_alpha=0.01` (`Val Macro F1 = 0.7688`).
-  - **Stabilitas 5-Fold CV (`train_dtl.csv`)**: Train `0.8444 ± 0.0021` | Val `0.8234 ± 0.0047` | Gap `0.0210`.
-- **Submisi Kaggle Reproducible (`output/submissions/submission_dtl_opsi_a1.csv`)**:
-  - Dilatih pada 100% `train.csv` terdeduplikasi (`27.309` baris) menggunakan 1 pohon C4.5 tunggal (361 nodes, depth 18) dengan kalibrasi *threshold* jujur berbasis 5-Fold Out-Of-Fold CV (`th = 0.415`, OOF Macro F1 meningkat di 5/5 fold: `0.82127` → `0.82954`, *Train-Val gap* `0.0141`).
-  - Skor **Public Leaderboard Kaggle: `0.83701`** (SHA-256 terverifikasi *byte-for-byte*: `c5565c01cc742184e25b2aa0cc4c406cc4accfc4a0dbe385513dbf0eb8adac7c`).
-- **Bonus #2 Visualisasi Top-$N$ Tree**: Dihasilkan melalui `export_tree_visualization(model, top_n=3, ...)` ke [`output/plots/dtl_tree_top_n.png`](output/plots/dtl_tree_top_n.png).
+| Algoritma (*From Scratch* — Non-Ensemble) | Konfigurasi Terbaik | Val Macro F1 | Val Accuracy | Custom Cost (`2·FP + FN`) | Berkas Submisi & Status Kaggle |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| **SVM (SMO)** | Kernel Laplacian ($C=6.9344, \gamma=0.0718$, 5-Fold CV) | **`0.8464`** | **`86.85%`** | **`983`** | `submission_svm_improved.csv` (**Final Selected #1**) |
+| **Logistic Regression** | FISTA L2 ($C=0.05, \tau=0.475$, CSR Pairwise Indicators) | `0.8297` | `85.23%` | `1,159` | `submission_logistic_regression.csv` (**Final Selected #2**) |
+| **DTL (C4.5)** | PSO + Histogram ($B=64$) + Minimal CCP (`415` nodes) | `0.8259` | `85.34%` | `1,059` | `submission_dtl_opsi_a1.csv` (**Final Selected #3**, Public LB `0.83701`) |
+| **Naive Bayes** | Stage E3: Weighted Gaussian NB (Adam L2) + Adaptive OOF | `0.8236` | `85.12%` | `1,082` | `submission_nb.csv` |
+| **KNN** | Manhattan / Euclidean ($k=10$) | `0.7915` | `81.86%` | `1,445` | `submission_knn.csv` (Public LB `0.81104`) |
 
 ---
 
@@ -84,15 +79,9 @@ Modul [`src/dtl.py`](src/dtl.py) diimplementasikan **100% pure NumPy** (tanpa im
    pip install -r requirements.txt
    ```
 
-3. **Verifikasi modul mandiri (opsional):**
-   ```bash
-   python3 -m src.dummy_generator
-   python3 -m src.dtl
-   ```
-
-4. **Menjalankan Notebook Reproducible (Lokal):**
-   - Pastikan kernel Jupyter / VS Code mengarah ke `venv` di atas dan direktori kerja berada di dalam repositori `IF3170_G15_MessiLearning/`.
+3. **Menjalankan Notebook Terpusat Secara Reproducible (Lokal):**
+   - Pastikan kernel Jupyter / VS Code mengarah ke `venv` di atas.
    - Buka [`notebooks/IF3170_G15_MessiLearning.ipynb`](notebooks/IF3170_G15_MessiLearning.ipynb) lalu pilih **Kernel → Restart Kernel and Run All Cells**.
 
-5. **Menjalankan Notebook di Google Colab:**
-   - Buka sel **Environment Setup (`#14`)** pada [`notebooks/IF3170_G15_MessiLearning.ipynb`](notebooks/IF3170_G15_MessiLearning.ipynb), *uncomment* perintah `!git clone https://github.com/mhps-null/IF3170_G15_MessiLearning.git` dan `%cd IF3170_G15_MessiLearning` (atau *mount* Google Drive yang berisi repositori di `/content/drive/MyDrive/IF3170_G15_MessiLearning`), lalu pilih **Runtime → Run all**.
+4. **Menjalankan di Google Colab:**
+   - Buka sel **Environment Setup (`#14`)** pada [`notebooks/IF3170_G15_MessiLearning.ipynb`](notebooks/IF3170_G15_MessiLearning.ipynb), *uncomment* baris `!git clone https://github.com/mhps-null/IF3170_G15_MessiLearning.git` dan `%cd IF3170_G15_MessiLearning` (atau *mount* Google Drive), lalu jalankan **Runtime → Run all**.
