@@ -447,6 +447,8 @@ def plot_svm_margin_2d(
     y: np.ndarray,
     output_path: str = "output/plots/svm_margin_linear.png",
     title: str = "SVM Decision Boundary & Margin",
+    xlabel: str = "Feature 1",
+    ylabel: str = "Feature 2",
 ):
     """
     Bonus Visualisasi Bidang Pemisah 2D (+1 Poin):
@@ -472,7 +474,7 @@ def plot_svm_margin_2d(
     zz = model.decision_function(grid).reshape(xx.shape)
 
     fig, ax = plt.subplots(figsize=(7, 5.5))
-    ax.contourf(xx, yy, zz, levels=25, cmap="RdBu", alpha=0.25)
+    ax.contourf(xx, yy, zz, levels=25, cmap="RdBu_r", alpha=0.25)  # f>0 (kelas 1) merah, sama dengan titik data
     contours = ax.contour(
         xx,
         yy,
@@ -516,8 +518,8 @@ def plot_svm_margin_2d(
         )
 
     ax.set_title(title)
-    ax.set_xlabel("Feature 1")
-    ax.set_ylabel("Feature 2")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(output_path, dpi=150)

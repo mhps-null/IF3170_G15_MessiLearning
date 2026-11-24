@@ -63,7 +63,7 @@ def generate_loss_contour_video(
     import pandas as pd
     from matplotlib.animation import FuncAnimation
 
-    from .logistic_regression import make_booking_logistic
+    from .logistic_regression import LogisticRegression
 
     columns = [feature_column, target_column]
     if not isinstance(data, pd.DataFrame):
@@ -73,7 +73,10 @@ def generate_loss_contour_video(
     if len(classes) != 2:
         raise ValueError("The contour demonstration requires two target labels.")
     feature_matrix = data[[feature_column]].to_numpy()
-    model = make_booking_logistic(len(feature_matrix), record_trajectory=True)
+    model = LogisticRegression(
+        penalty="l1", reg_lambda=1 / len(feature_matrix), n_iters=1500,
+        tol=1e-5, record_trajectory=True,
+    )
     model.fit(feature_matrix, labels)
 
     feature = feature_matrix[:, 0].astype(float, copy=False)
