@@ -1389,8 +1389,9 @@ class _GaussianNaiveBayesBase(BaseModel):
 
         return model
 
-
-class NaiveBayes(_GaussianNaiveBayesBase):
+class _WeightedGaussianNaiveBayes(
+    _GaussianNaiveBayesBase
+):
     """
     Optimized Weighted Gaussian Naive Bayes.
 
@@ -2644,6 +2645,3006 @@ class NaiveBayes(_GaussianNaiveBayesBase):
         )
 
         print("=" * 65)
+
+
+
+class _ExtendedNaiveBayes(_WeightedGaussianNaiveBayes):
+    """
+    Extended Optimized Weighted Gaussian Naive Bayes.
+
+    Optimization stages:
+        E0: Original Gaussian Naive Bayes
+        E1: Weighted Gaussian Naive Bayes
+        E2: Advanced Feature Engineering
+        E3: Adaptive Target Encoding
+        E4: Cross-fitted Likelihood Training
+        E5: Hierarchical Target Encoding
+        E6: Gaussian Mixture Naive Bayes
+
+    References:
+
+    Target Encoder Internal Cross-Fitting:
+        https://scikit-learn.org/stable/auto_examples/
+        preprocessing/plot_target_encoder_cross_val.html
+
+    Micci-Barreca (2001):
+        A Preprocessing Scheme for High-Cardinality
+        Categorical Attributes in Classification
+        and Prediction Problems.
+        https://doi.org/10.1145/507533.507538
+
+    Dempster, Laird, Rubin (1977):
+        Maximum Likelihood from Incomplete Data
+        via the EM Algorithm.
+        https://doi.org/10.1111/j.2517-6161.1977.tb01600.x
+
+    All machine learning algorithms are implemented
+    from scratch using NumPy and Pandas.
+    """
+
+    # ==========================================================
+    # INITIALIZATION
+    # ==========================================================
+
+    def __init__(
+        self,
+        optimization_stage=6,
+        mixture_components=(1, 2, 3),
+        mixture_variance_candidates=(0.03, 0.1),
+        em_iterations=30,
+        em_tolerance=1e-5,
+        mixture_batch_size=16,
+        verbose=True,
+        **kwargs
+    ):
+
+        if optimization_stage not in range(7):
+            raise ValueError(
+                "optimization_stage must be between 0 and 6."
+            )
+
+        # Parent implementation supports E0-E3.
+        super().__init__(
+            optimization_stage=min(optimization_stage, 3),
+            **kwargs
+        )
+
+        self.optimization_stage = optimization_stage
+
+        self.mixture_components = tuple(
+            sorted(set(mixture_components))
+        )
+
+        if (
+            not self.mixture_components
+            or 1 not in self.mixture_components
+            or any(
+                not isinstance(k, (int, np.integer)) or k < 1
+                for k in self.mixture_components
+            )
+        ):
+            raise ValueError(
+                "mixture_components must contain positive "
+                "integers, including 1."
+            )
+
+        self.mixture_variance_candidates = tuple(
+            mixture_variance_candidates
+        )
+
+        if (
+            not self.mixture_variance_candidates
+            or not np.all(
+                np.isfinite(self.mixture_variance_candidates)
+            )
+            or np.any(
+                np.asarray(self.mixture_variance_candidates) <= 0
+            )
+        ):
+            raise ValueError(
+                "Mixture variance candidates must be positive."
+            )
+
+        if em_iterations < 1 or mixture_batch_size < 1:
+            raise ValueError(
+                "EM iterations and batch size must be positive."
+            )
+
+        if not np.isfinite(em_tolerance) or em_tolerance <= 0:
+            raise ValueError(
+                "EM tolerance must be positive and finite."
+            )
+
+        self.em_iterations = int(em_iterations)
+        self.em_tolerance = float(em_tolerance)
+        self.mixture_batch_size = int(mixture_batch_size)
+        self.verbose = bool(verbose)
+
+        # Final density parameters.
+        self.n_components_ = 1
+
+        self.mixture_weights_ = None
+        self.mixture_means_ = None
+        self.mixture_variances_ = None
+
+        # Cross-fitted likelihood representation.
+        self.oof_likelihood_ratios_ = None
+
+    # ==========================================================
+    # LOGGING
+    # ==========================================================
+
+    def _log(self, message):
+
+        if self.verbose:
+            print(message, flush=True)
+
+    # ==========================================================
+    # E5: HIERARCHICAL FEATURE GROUPS
+    # ==========================================================
+
+    @staticmethod
+    def _hierarchical_levels(group):
+        """
+        Define a deterministic hierarchy from contextual,
+        coarse-grained features to fine-grained features.
+
+        Example:
+
+            booking_channel
+                -> booking_channel, special_requests
+                -> booking_channel, special_requests,
+                   arrival_date
+
+        Hierarchy ordering does not use target labels.
+        """
+
+        priority = {
+            "booking_channel": 0,
+            "special_requests": 1,
+            "room_category": 2,
+            "meal_package": 3,
+
+            "arrival_year": 4,
+            "arrival_month": 5,
+
+            "booking_month": 6,
+            "booking_week": 7,
+
+            "lead": 8,
+            "rate": 9,
+
+            "num_adults": 10,
+            "num_children": 11,
+            "guests": 12,
+
+            "lead_fine": 20,
+            "rate_fine": 21,
+
+            "arrival_day": 30,
+            "arrival_date": 31,
+            "booking_date": 32,
+
+            "lead_exact": 33,
+            "rate_exact": 34
+        }
+
+        ordered = tuple(
+            sorted(
+                group,
+                key=lambda feature: priority.get(feature, 15)
+            )
+        )
+
+        return [
+            ordered[:level]
+            for level in range(1, len(ordered) + 1)
+        ]
+
+    # ==========================================================
+    # E5: HIERARCHICAL ADAPTIVE TARGET ENCODING
+    # ==========================================================
+
+    def _fit_encoder(self, keys, y, groups):
+        """
+        E0-E4:
+            Use the previous target encoding implementation.
+
+        E5-E6:
+            Hierarchical target encoding with adaptive
+            smoothing selected using OOF Brier score.
+        """
+
+        if self.optimization_stage < 5:
+
+            return super()._fit_encoder(
+                keys,
+                y,
+                groups
+            )
+
+        n_samples = len(y)
+
+        candidates = np.asarray(
+            self.smoothing_candidates,
+            dtype=np.float64
+        )
+
+        encoded = np.empty(
+            (n_samples, len(groups)),
+            dtype=np.float64
+        )
+
+        mappings = {}
+        selected_smoothing = {}
+
+        folds = list(self._stratified_folds(y))
+
+        global_prior = float(np.mean(y))
+
+        # Cache factorized keys shared by hierarchies.
+        factorization_cache = {}
+
+        def factorize_level(level):
+
+            if level not in factorization_cache:
+
+                group_keys = self._group_key(keys, level)
+
+                codes, unique = pd.factorize(
+                    group_keys,
+                    sort=False
+                )
+
+                if np.any(codes < 0):
+                    raise ValueError(
+                        "Unexpected missing category code."
+                    )
+
+                first_indices = np.unique(
+                    codes,
+                    return_index=True
+                )[1]
+
+                factorization_cache[level] = (
+                    codes,
+                    unique,
+                    first_indices
+                )
+
+            return factorization_cache[level]
+
+        for j, group in enumerate(groups):
+
+            levels = self._hierarchical_levels(group)
+
+            level_data = [
+                factorize_level(level)
+                for level in levels
+            ]
+
+            candidate_oof = np.empty(
+                (n_samples, len(candidates)),
+                dtype=np.float64
+            )
+
+            # --------------------------------------------------
+            # OUT-OF-FOLD HIERARCHICAL ENCODING
+            # --------------------------------------------------
+
+            for train_idx, holdout_idx in folds:
+
+                fold_prior = float(
+                    np.mean(y[train_idx])
+                )
+
+                # Level 0: global training prior.
+                parent_encoding = np.full(
+                    (len(holdout_idx), len(candidates)),
+                    fold_prior,
+                    dtype=np.float64
+                )
+
+                for codes, unique, _ in level_data:
+
+                    n_categories = len(unique)
+
+                    counts = np.bincount(
+                        codes[train_idx],
+                        minlength=n_categories
+                    )
+
+                    positives = np.bincount(
+                        codes[train_idx],
+                        weights=y[train_idx],
+                        minlength=n_categories
+                    )
+
+                    holdout_codes = codes[holdout_idx]
+
+                    # Hierarchical shrinkage:
+                    # child is smoothed toward its parent.
+                    parent_encoding = (
+                        positives[holdout_codes, None]
+                        + candidates * parent_encoding
+                    ) / (
+                        counts[holdout_codes, None]
+                        + candidates
+                    )
+
+                candidate_oof[holdout_idx] = (
+                    parent_encoding
+                )
+
+            # --------------------------------------------------
+            # ADAPTIVE SMOOTHING PER FEATURE GROUP
+            # --------------------------------------------------
+
+            brier_scores = np.mean(
+                (
+                    candidate_oof - y[:, None]
+                ) ** 2,
+                axis=0
+            )
+
+            best_idx = int(
+                np.argmin(brier_scores)
+            )
+
+            best_alpha = float(
+                candidates[best_idx]
+            )
+
+            selected_smoothing[group] = best_alpha
+
+            encoded[:, j] = (
+                candidate_oof[:, best_idx]
+            )
+
+            # --------------------------------------------------
+            # FULL-TRAINING HIERARCHICAL MAPS
+            # --------------------------------------------------
+
+            group_maps = []
+
+            parent_encoding = np.full(
+                n_samples,
+                global_prior,
+                dtype=np.float64
+            )
+
+            for level, data in zip(
+                levels,
+                level_data
+            ):
+
+                codes, unique, first_indices = data
+
+                n_categories = len(unique)
+
+                counts = np.bincount(
+                    codes,
+                    minlength=n_categories
+                )
+
+                positives = np.bincount(
+                    codes,
+                    weights=y,
+                    minlength=n_categories
+                )
+
+                parent_encoding = (
+                    positives[codes]
+                    + best_alpha * parent_encoding
+                ) / (
+                    counts[codes]
+                    + best_alpha
+                )
+
+                # All rows belonging to a category
+                # have the same encoded value.
+                mapping = dict(
+                    zip(
+                        unique,
+                        parent_encoding[first_indices]
+                    )
+                )
+
+                group_maps.append(
+                    (level, mapping)
+                )
+
+            mappings[group] = group_maps
+
+        self.feature_smoothing_ = selected_smoothing
+
+        return encoded, mappings, global_prior
+
+    # ==========================================================
+    # E5: HIERARCHICAL ENCODING INFERENCE
+    # ==========================================================
+
+    def _transform_encoder(
+        self,
+        keys,
+        groups,
+        mappings,
+        prior
+    ):
+
+        if self.optimization_stage < 5:
+
+            return super()._transform_encoder(
+                keys,
+                groups,
+                mappings,
+                prior
+            )
+
+        n_samples = len(
+            next(iter(keys.values()))
+        )
+
+        encoded = np.empty(
+            (n_samples, len(groups)),
+            dtype=np.float64
+        )
+
+        key_cache = {}
+
+        for j, group in enumerate(groups):
+
+            # Initial fallback: global prior.
+            values = np.full(
+                n_samples,
+                prior,
+                dtype=np.float64
+            )
+
+            for level, mapping in mappings[group]:
+
+                if level not in key_cache:
+
+                    key_cache[level] = (
+                        self._group_key(keys, level)
+                    )
+
+                mapped = (
+                    key_cache[level]
+                    .map(mapping)
+                    .to_numpy(dtype=np.float64)
+                )
+
+                # If a child category is unknown,
+                # preserve its parent's probability.
+                values = np.where(
+                    np.isfinite(mapped),
+                    mapped,
+                    values
+                )
+
+            encoded[:, j] = values
+
+        return encoded
+
+    # ==========================================================
+    # E6: GAUSSIAN MIXTURE LOG DENSITY
+    # ==========================================================
+
+    @staticmethod
+    def _mixture_component_log_pdf(
+        X,
+        weights,
+        means,
+        variances
+    ):
+        """
+        X shape:
+            (n_samples, n_features)
+
+        Parameter shape:
+            (n_features, n_components)
+
+        Output:
+            (n_samples, n_features, n_components)
+        """
+
+        difference = (
+            X[:, :, None] - means[None, :, :]
+        )
+
+        return (
+            np.log(weights)[None, :, :]
+            - 0.5 * (
+                np.log(
+                    2.0 * np.pi * variances
+                )[None, :, :]
+                + difference ** 2
+                / variances[None, :, :]
+            )
+        )
+
+    @classmethod
+    def _mixture_log_pdf(
+        cls,
+        X,
+        weights,
+        means,
+        variances
+    ):
+
+        component_log_probs = (
+            cls._mixture_component_log_pdf(
+                X,
+                weights,
+                means,
+                variances
+            )
+        )
+
+        # Numerically stable log-sum-exp.
+        return np.logaddexp.reduce(
+            component_log_probs,
+            axis=2
+        )
+
+    # ==========================================================
+    # E6: EXPECTATION-MAXIMIZATION FROM SCRATCH
+    # ==========================================================
+
+    def _fit_mixture_batch(
+        self,
+        X,
+        n_components,
+        variance_floor
+    ):
+        """
+        Fit independent univariate Gaussian mixtures.
+
+        Every feature has its own mixture parameters.
+        Features are not combined into a multivariate GMM.
+        """
+
+        n_samples, n_features = X.shape
+
+        K = n_components
+
+        # ------------------------------------------------------
+        # INITIALIZATION
+        # ------------------------------------------------------
+
+        quantiles = (
+            np.arange(K) + 0.5
+        ) / K
+
+        # Deterministic initialization using quantiles.
+        means = np.quantile(
+            X,
+            quantiles,
+            axis=0
+        ).T.copy()
+
+        initial_variance = np.maximum(
+            np.var(X, axis=0) / K,
+            variance_floor
+        )
+
+        variances = np.repeat(
+            initial_variance[:, None],
+            K,
+            axis=1
+        )
+
+        weights = np.full(
+            (n_features, K),
+            1.0 / K,
+            dtype=np.float64
+        )
+
+        previous_log_likelihood = None
+
+        # ------------------------------------------------------
+        # EXPECTATION-MAXIMIZATION LOOP
+        # ------------------------------------------------------
+
+        for iteration in range(self.em_iterations):
+
+            # ==================================================
+            # E-STEP
+            # ==================================================
+
+            log_joint = (
+                self._mixture_component_log_pdf(
+                    X,
+                    weights,
+                    means,
+                    variances
+                )
+            )
+
+            log_normalizer = np.logaddexp.reduce(
+                log_joint,
+                axis=2,
+                keepdims=True
+            )
+
+            responsibilities = np.exp(
+                log_joint - log_normalizer
+            )
+
+            current_log_likelihood = float(
+                np.mean(log_normalizer)
+            )
+
+            # Check convergence.
+            if previous_log_likelihood is not None:
+
+                improvement = abs(
+                    current_log_likelihood
+                    - previous_log_likelihood
+                )
+
+                if improvement < self.em_tolerance:
+                    break
+
+            previous_log_likelihood = (
+                current_log_likelihood
+            )
+
+            # ==================================================
+            # M-STEP
+            # ==================================================
+
+            component_mass = responsibilities.sum(
+                axis=0
+            )
+
+            safe_mass = np.maximum(
+                component_mass,
+                1e-12
+            )
+
+            new_weights = (
+                component_mass / n_samples
+            )
+
+            new_means = (
+                responsibilities
+                * X[:, :, None]
+            ).sum(axis=0) / safe_mass
+
+            difference = (
+                X[:, :, None]
+                - new_means[None, :, :]
+            )
+
+            new_variances = (
+                responsibilities
+                * difference ** 2
+            ).sum(axis=0) / safe_mass
+
+            # Handle nearly empty mixture components.
+            active = component_mass > 1e-6
+
+            means = np.where(
+                active,
+                new_means,
+                means
+            )
+
+            variances = np.where(
+                active,
+                new_variances,
+                variances
+            )
+
+            # Prevent singular Gaussian distributions.
+            variances = np.maximum(
+                variances,
+                variance_floor
+            )
+
+            weights = np.maximum(
+                new_weights,
+                1e-8
+            )
+
+            weights /= weights.sum(
+                axis=1,
+                keepdims=True
+            )
+
+        return weights, means, variances
+
+    # ==========================================================
+    # E6: CLASS-CONDITIONAL DENSITY FITTING
+    # ==========================================================
+
+    def _fit_density(
+        self,
+        X,
+        y,
+        n_components,
+        smoothing
+    ):
+        """
+        Return arrays with shape:
+            (2, n_features, n_components)
+
+        Axis 0: class
+        Axis 1: feature
+        Axis 2: Gaussian component
+        """
+
+        n_features = X.shape[1]
+
+        # K=1 preserves the previous Gaussian model.
+        if n_components == 1:
+
+            means, variances, _, _ = (
+                self._fit_gaussian(
+                    X,
+                    y,
+                    smoothing
+                )
+            )
+
+            weights = np.ones(
+                (2, n_features, 1),
+                dtype=np.float64
+            )
+
+            return (
+                weights,
+                means[:, :, None],
+                variances[:, :, None]
+            )
+
+        # K>1 uses independent Gaussian mixtures.
+        shape = (
+            2,
+            n_features,
+            n_components
+        )
+
+        mixture_weights = np.empty(shape)
+        mixture_means = np.empty(shape)
+        mixture_variances = np.empty(shape)
+
+        for c in (0, 1):
+
+            X_c = X[y == c]
+
+            if len(X_c) == 0:
+                raise ValueError(
+                    "Both classes must be represented."
+                )
+
+            # Process features in batches to limit memory.
+            for start in range(
+                0,
+                n_features,
+                self.mixture_batch_size
+            ):
+
+                end = min(
+                    start + self.mixture_batch_size,
+                    n_features
+                )
+
+                weights, means, variances = (
+                    self._fit_mixture_batch(
+                        X_c[:, start:end],
+                        n_components,
+                        smoothing
+                    )
+                )
+
+                mixture_weights[c, start:end] = weights
+
+                mixture_means[c, start:end] = means
+
+                mixture_variances[c, start:end] = variances
+
+        return (
+            mixture_weights,
+            mixture_means,
+            mixture_variances
+        )
+
+    # ==========================================================
+    # E6: FEATURE LOG-LIKELIHOOD RATIOS
+    # ==========================================================
+
+    def _density_likelihood_ratios(
+        self,
+        X,
+        density
+    ):
+
+        weights, means, variances = density
+
+        n_components = weights.shape[2]
+
+        # Preserve the original Gaussian ratio for K=1.
+        if n_components == 1:
+
+            return self._feature_log_likelihood_ratio(
+                X,
+                means[:, :, 0],
+                variances[:, :, 0]
+            )
+
+        n_samples, n_features = X.shape
+
+        ratios = np.empty(
+            (n_samples, n_features),
+            dtype=np.float64
+        )
+
+        for start in range(
+            0,
+            n_features,
+            self.mixture_batch_size
+        ):
+
+            end = min(
+                start + self.mixture_batch_size,
+                n_features
+            )
+
+            X_batch = X[:, start:end]
+
+            log_prob_0 = self._mixture_log_pdf(
+                X_batch,
+                weights[0, start:end],
+                means[0, start:end],
+                variances[0, start:end]
+            )
+
+            log_prob_1 = self._mixture_log_pdf(
+                X_batch,
+                weights[1, start:end],
+                means[1, start:end],
+                variances[1, start:end]
+            )
+
+            ratios[:, start:end] = (
+                log_prob_1 - log_prob_0
+            )
+
+        return ratios
+
+    # ==========================================================
+    # E4: PREPROCESSING PIPELINE
+    # ==========================================================
+
+    def _fit_preprocessing_pipeline(
+        self,
+        keys,
+        y,
+        groups
+    ):
+
+        counts = np.bincount(
+            y,
+            minlength=2
+        )
+
+        if np.min(counts) < self.n_folds:
+            raise ValueError(
+                "Insufficient class samples for nested "
+                "out-of-fold target encoding."
+            )
+
+        encoded, mappings, prior = (
+            self._fit_encoder(
+                keys,
+                y,
+                groups
+            )
+        )
+
+        mean, std = self._fit_scaler(
+            encoded
+        )
+
+        X_train = self._transform_scaler(
+            encoded,
+            mean,
+            std
+        )
+
+        pipeline = {
+            "mappings": mappings,
+            "prior": prior,
+            "mean": mean,
+            "std": std,
+            "feature_smoothing": (
+                self.feature_smoothing_.copy()
+            )
+        }
+
+        return X_train, pipeline
+
+    def _apply_preprocessing_pipeline(
+        self,
+        keys,
+        groups,
+        pipeline
+    ):
+
+        encoded = self._transform_encoder(
+            keys,
+            groups,
+            pipeline["mappings"],
+            pipeline["prior"]
+        )
+
+        return self._transform_scaler(
+            encoded,
+            pipeline["mean"],
+            pipeline["std"]
+        )
+
+    # ==========================================================
+    # E4: CROSS-FITTED LIKELIHOOD TRAINING
+    # ==========================================================
+
+    def _crossfit_likelihood_ratios(
+        self,
+        keys,
+        y,
+        groups,
+        density_configs
+    ):
+        """
+        Generate out-of-fold likelihood ratios.
+
+        For every outer fold:
+            1. Fit an OOF target encoder using only
+               outer-fold training data.
+            2. Fit scaler on outer-fold training data.
+            3. Fit Gaussian/GMM density.
+            4. Generate ratios for held-out rows.
+
+        No held-out label is used by that fold's
+        encoder, scaler, or density estimator.
+        """
+
+        n_samples = len(y)
+
+        n_features = len(groups)
+
+        results = {
+            config: np.empty(
+                (n_samples, n_features),
+                dtype=np.float64
+            )
+            for config in density_configs
+        }
+
+        folds = list(
+            self._stratified_folds(y)
+        )
+
+        for fold_number, indices in enumerate(
+            folds,
+            start=1
+        ):
+
+            train_idx, holdout_idx = indices
+
+            self._log(
+                f"  Cross-fitting fold "
+                f"{fold_number}/{len(folds)}"
+            )
+
+            train_keys = self._subset_keys(
+                keys,
+                train_idx
+            )
+
+            holdout_keys = self._subset_keys(
+                keys,
+                holdout_idx
+            )
+
+            y_train = y[train_idx]
+
+            # Entire preprocessing is independently
+            # fitted inside every outer fold.
+            X_train, pipeline = (
+                self._fit_preprocessing_pipeline(
+                    train_keys,
+                    y_train,
+                    groups
+                )
+            )
+
+            X_holdout = (
+                self._apply_preprocessing_pipeline(
+                    holdout_keys,
+                    groups,
+                    pipeline
+                )
+            )
+
+            # Reuse fold preprocessing across density
+            # hyperparameter configurations.
+            for config in density_configs:
+
+                n_components, smoothing = config
+
+                density = self._fit_density(
+                    X_train,
+                    y_train,
+                    n_components,
+                    smoothing
+                )
+
+                ratios = self._density_likelihood_ratios(
+                    X_holdout,
+                    density
+                )
+
+                results[config][holdout_idx] = ratios
+
+        for config, ratios in results.items():
+
+            if not np.all(np.isfinite(ratios)):
+                raise FloatingPointError(
+                    f"Non-finite likelihood ratios: {config}"
+                )
+
+        return results
+
+    # ==========================================================
+    # DENSITY HYPERPARAMETER CONFIGURATIONS
+    # ==========================================================
+
+    def _density_configurations(self):
+
+        # E4 and E5 use single Gaussian distributions.
+        configs = [
+            (1, float(smoothing))
+            for smoothing in self.variance_candidates
+        ]
+
+        if self.optimization_stage >= 6:
+
+            # Additional mixture configurations.
+            # Limit the grid to avoid excessive EM training.
+            configs.extend([
+                (int(k), float(smoothing))
+                for k in self.mixture_components
+                if k > 1
+                for smoothing
+                in self.mixture_variance_candidates
+            ])
+
+        return configs
+
+    # ==========================================================
+    # INTERNAL VALIDATION AND HYPERPARAMETER TUNING
+    # ==========================================================
+
+    def _optimize_crossfitted(
+        self,
+        keys,
+        y,
+        groups
+    ):
+
+        train_idx, val_idx = (
+            self._train_validation_split(y)
+        )
+
+        train_keys = self._subset_keys(
+            keys,
+            train_idx
+        )
+
+        val_keys = self._subset_keys(
+            keys,
+            val_idx
+        )
+
+        y_train = y[train_idx]
+
+        y_val = y[val_idx]
+
+        configs = self._density_configurations()
+
+        self._log(
+            "\nGenerating internal OOF likelihood ratios..."
+        )
+
+        oof_ratios = self._crossfit_likelihood_ratios(
+            train_keys,
+            y_train,
+            groups,
+            configs
+        )
+
+        # Fit inference preprocessing on the entire
+        # internal training subset.
+        X_train, pipeline = (
+            self._fit_preprocessing_pipeline(
+                train_keys,
+                y_train,
+                groups
+            )
+        )
+
+        X_val = self._apply_preprocessing_pipeline(
+            val_keys,
+            groups,
+            pipeline
+        )
+
+        counts = np.bincount(
+            y_train,
+            minlength=2
+        )
+
+        priors = counts / counts.sum()
+
+        best = None
+
+        self.optimization_history_ = []
+
+        # ------------------------------------------------------
+        # HYPERPARAMETER GRID SEARCH
+        # ------------------------------------------------------
+
+        for config in configs:
+
+            n_components, smoothing = config
+
+            self._log(
+                f"\nTesting K={n_components}, "
+                f"smoothing={smoothing}"
+            )
+
+            density = self._fit_density(
+                X_train,
+                y_train,
+                n_components,
+                smoothing
+            )
+
+            validation_ratios = (
+                self._density_likelihood_ratios(
+                    X_val,
+                    density
+                )
+            )
+
+            training_ratios = oof_ratios[config]
+
+            for regularization in (
+                self.regularization_candidates
+            ):
+
+                # Learn weights using exclusively
+                # cross-fitted training ratios.
+                weights, intercept = (
+                    self._learn_feature_weights(
+                        training_ratios,
+                        y_train,
+                        priors,
+                        regularization
+                    )
+                )
+
+                scores = (
+                    validation_ratios @ weights
+                    + intercept
+                )
+
+                accuracy, threshold = (
+                    self._find_best_threshold(
+                        scores,
+                        y_val
+                    )
+                )
+
+                result = {
+                    "accuracy": float(accuracy),
+                    "n_components": int(n_components),
+                    "var_smoothing": float(smoothing),
+                    "regularization": float(
+                        regularization
+                    ),
+                    "threshold": float(threshold),
+                    "active_features": int(
+                        np.sum(weights > 1e-8)
+                    )
+                }
+
+                self.optimization_history_.append(
+                    result
+                )
+
+                self._log(
+                    f"  L2={regularization}: "
+                    f"accuracy={accuracy:.4%}"
+                )
+
+                # Candidates are evaluated in order of
+                # increasing mixture complexity.
+                # Ties preserve the earlier candidate.
+                if (
+                    best is None
+                    or accuracy > best["accuracy"]
+                ):
+
+                    best = result.copy()
+
+        return best
+
+    # ==========================================================
+    # FINAL MODEL TRAINING
+    # ==========================================================
+
+    def fit(self, X, y=None):
+
+        # Preserve previous implementations.
+        if self.optimization_stage <= 3:
+
+            self.n_components_ = 1
+
+            self.mixture_weights_ = None
+            self.mixture_means_ = None
+            self.mixture_variances_ = None
+
+            self.oof_likelihood_ratios_ = None
+
+            return super().fit(X, y)
+
+        self.is_fitted = False
+
+        self._validate_dataframe(X)
+
+        if y is None:
+
+            if "is_canceled" not in X.columns:
+
+                raise ValueError(
+                    "Provide y or an is_canceled column."
+                )
+
+            y = X["is_canceled"].to_numpy()
+
+        y = self._validate_target(X, y)
+
+        self._log(
+            f"\nTraining optimization stage E"
+            f"{self.optimization_stage}"
+        )
+
+        # ------------------------------------------------------
+        # 1. FEATURE ENGINEERING
+        # ------------------------------------------------------
+
+        keys = self._build_feature_keys(X)
+
+        groups = self._candidate_groups(keys)
+
+        self.candidate_groups_ = groups
+
+        self.selected_groups_ = groups
+
+        self.feature_names_ = [
+            " × ".join(group)
+            for group in groups
+        ]
+
+        # ------------------------------------------------------
+        # 2. INTERNAL HYPERPARAMETER OPTIMIZATION
+        # ------------------------------------------------------
+
+        best = self._optimize_crossfitted(
+            keys,
+            y,
+            groups
+        )
+
+        self.n_components_ = best["n_components"]
+
+        self.var_smoothing_ = best["var_smoothing"]
+
+        self.regularization_ = best["regularization"]
+
+        self.log_lr_threshold_ = best["threshold"]
+
+        self.validation_accuracy_ = best["accuracy"]
+
+        self._log(
+            "\nBest internal configuration:"
+        )
+
+        self._log(str(best))
+
+        # ------------------------------------------------------
+        # 3. FINAL CROSS-FITTED LIKELIHOOD RATIOS
+        # ------------------------------------------------------
+
+        selected_config = (
+            self.n_components_,
+            self.var_smoothing_
+        )
+
+        self._log(
+            "\nGenerating final OOF likelihood ratios..."
+        )
+
+        oof_results = self._crossfit_likelihood_ratios(
+            keys,
+            y,
+            groups,
+            [selected_config]
+        )
+
+        self.oof_likelihood_ratios_ = (
+            oof_results[selected_config]
+        )
+
+        # ------------------------------------------------------
+        # 4. FINAL PREPROCESSING PIPELINE
+        # ------------------------------------------------------
+
+        X_train, pipeline = (
+            self._fit_preprocessing_pipeline(
+                keys,
+                y,
+                groups
+            )
+        )
+
+        self.category_maps_ = pipeline["mappings"]
+
+        self.encoding_prior_ = pipeline["prior"]
+
+        self.scaler_mean_ = pipeline["mean"]
+
+        self.scaler_std_ = pipeline["std"]
+
+        self.feature_smoothing_ = (
+            pipeline["feature_smoothing"]
+        )
+
+        # ------------------------------------------------------
+        # 5. FINAL GAUSSIAN OR GMM DENSITY
+        # ------------------------------------------------------
+
+        (
+            self.mixture_weights_,
+            self.mixture_means_,
+            self.mixture_variances_
+        ) = self._fit_density(
+            X_train,
+            y,
+            self.n_components_,
+            self.var_smoothing_
+        )
+
+        self.class_counts_ = np.bincount(
+            y,
+            minlength=2
+        )
+
+        self.class_priors_ = (
+            self.class_counts_
+            / self.class_counts_.sum()
+        )
+
+        self.log_class_priors_ = np.log(
+            self.class_priors_
+        )
+
+        # Aggregate mixture moments for compatibility
+        # with inherited diagnostic functions.
+        self.theta_ = np.sum(
+            self.mixture_weights_
+            * self.mixture_means_,
+            axis=2
+        )
+
+        self.var_ = np.sum(
+            self.mixture_weights_
+            * (
+                self.mixture_variances_
+                + (
+                    self.mixture_means_
+                    - self.theta_[:, :, None]
+                ) ** 2
+            ),
+            axis=2
+        )
+
+        # ------------------------------------------------------
+        # 6. FINAL REGULARIZED FEATURE WEIGHTING
+        # ------------------------------------------------------
+
+        # IMPORTANT:
+        # Weights are learned from OOF likelihood ratios,
+        # not from the final density's in-sample ratios.
+        (
+            self.feature_weights_,
+            self.intercept_
+        ) = self._learn_feature_weights(
+            self.oof_likelihood_ratios_,
+            y,
+            self.class_priors_,
+            self.regularization_
+        )
+
+        # ------------------------------------------------------
+        # 7. FINAL CLASSIFICATION PARAMETERS
+        # ------------------------------------------------------
+
+        self.threshold_ = float(
+            self._sigmoid(
+                self.log_lr_threshold_
+            )
+        )
+
+        self.X_fit_ = X_train
+
+        self.n_features_in_ = X_train.shape[1]
+
+        self.is_fitted = True
+
+        return self
+
+    # ==========================================================
+    # FINAL WEIGHTED INFERENCE
+    # ==========================================================
+
+    def decision_function(self, X):
+
+        self._check_fitted()
+
+        if self.optimization_stage <= 3:
+
+            return super().decision_function(X)
+
+        X_transformed = self.transform(X)
+
+        density = (
+            self.mixture_weights_,
+            self.mixture_means_,
+            self.mixture_variances_
+        )
+
+        ratios = self._density_likelihood_ratios(
+            X_transformed,
+            density
+        )
+
+        scores = (
+            ratios @ self.feature_weights_
+            + self.intercept_
+        )
+
+        return scores
+
+    # ==========================================================
+    # MIXTURE PARAMETER INSPECTION
+    # ==========================================================
+
+    def get_mixture_info(self):
+
+        self._check_fitted()
+
+        if self.optimization_stage < 4:
+
+            raise RuntimeError(
+                "Mixture inspection requires E4 or later."
+            )
+
+        records = []
+
+        for c in (0, 1):
+
+            for j, feature in enumerate(
+                self.feature_names_
+            ):
+
+                for k in range(self.n_components_):
+
+                    records.append({
+                        "class": c,
+                        "feature": feature,
+                        "component": k + 1,
+                        "mixture_weight": (
+                            self.mixture_weights_[c, j, k]
+                        ),
+                        "mean": (
+                            self.mixture_means_[c, j, k]
+                        ),
+                        "variance": (
+                            self.mixture_variances_[c, j, k]
+                        ),
+                        "feature_weight": (
+                            self.feature_weights_[j]
+                        )
+                    })
+
+        return pd.DataFrame(records)
+
+    # ==========================================================
+    # MODEL SUMMARY
+    # ==========================================================
+
+    def summary(self):
+
+        self._check_fitted()
+
+        super().summary()
+
+        if self.optimization_stage >= 4:
+
+            print(
+                "Cross-fitted likelihood : Enabled"
+            )
+
+            print(
+                "Hierarchical encoding   :",
+                self.optimization_stage >= 5
+            )
+
+            print(
+                "Gaussian components     :",
+                self.n_components_
+            )
+
+            print(
+                "Density estimator       :",
+                (
+                    "Gaussian Mixture"
+                    if self.n_components_ > 1
+                    else "Single Gaussian"
+                )
+            )
+
+            print(
+                "EM iterations (maximum) :",
+                self.em_iterations
+            )
+
+            print("=" * 65)
+
+class NaiveBayes(_ExtendedNaiveBayes):
+    """
+    Robust Weighted Naive Bayes from Scratch.
+
+    IF3170 - G15 MessiLearning
+
+    Optimization stages:
+        E0: Original Gaussian Naive Bayes
+        E1: Weighted Gaussian Naive Bayes
+        E2: Advanced Feature Engineering
+        E3: Adaptive Target Encoding
+        E4: Cross-fitted Likelihood Training
+        E5: Hierarchical Target Encoding
+        E6: Gaussian Mixture Naive Bayes
+        E7: Robust Weighted Gaussian Naive Bayes
+        E8: Direct Likelihood Ratio Naive Bayes
+
+    E7 and E8 are alternative developments of E3.
+    They do not inherit Gaussian mixture density estimation.
+
+    References:
+        Zou and Hastie (2005).
+        Regularization and Variable Selection
+        via the Elastic Net.
+        https://doi.org/10.1111/j.1467-9868.2005.00503.x
+
+        Micci-Barreca (2001).
+        A Preprocessing Scheme for High-Cardinality
+        Categorical Attributes in Classification
+        and Prediction Problems.
+        https://doi.org/10.1145/507533.507538
+
+        Zaidi et al. (2013).
+        Alleviating Naive Bayes Attribute Independence
+        Assumption by Attribute Weighting.
+        https://jmlr.org/papers/v14/zaidi13a.html
+
+        Kingma and Ba (2015).
+        Adam: A Method for Stochastic Optimization.
+        https://arxiv.org/abs/1412.6980
+
+    No sklearn estimator is used.
+    """
+
+    # ==========================================================
+    # INITIALIZATION
+    # ==========================================================
+
+    def __init__(
+        self,
+        optimization_stage=8,
+        robust_configs=None,
+        calibration_folds=3,
+        min_feature_coverage=0.20,
+        threshold_tolerance=0.0005,
+        **kwargs
+    ):
+
+        if optimization_stage not in range(9):
+            raise ValueError(
+                "optimization_stage must be 0..8"
+            )
+
+        super().__init__(
+            optimization_stage=min(
+                optimization_stage, 6
+            ),
+            **kwargs
+        )
+
+        self.optimization_stage = optimization_stage
+
+        self.calibration_folds = int(
+            calibration_folds
+        )
+
+        self.min_feature_coverage = float(
+            min_feature_coverage
+        )
+
+        self.threshold_tolerance = float(
+            threshold_tolerance
+        )
+
+        # Configuration format:
+        #
+        # (
+        #     minimum_category_support,
+        #     encoding_method,
+        #     variance_smoothing,
+        #     lambda_L1,
+        #     lambda_L2
+        # )
+
+        if optimization_stage == 7:
+
+            defaults = (
+                (3, "oof", 0.1, 0.0, 0.01),
+                (3, "oof", 0.1, 0.001, 0.01),
+                (10, "oof", 0.1, 0.001, 0.01),
+                (10, "loo", 0.1, 0.001, 0.01),
+                (10, "oof", 0.3, 0.005, 0.05),
+            )
+
+        else:
+
+            # E8 does not use Gaussian variance.
+            defaults = (
+                (3, "oof", 0.0, 0.0, 0.01),
+                (3, "oof", 0.0, 0.001, 0.01),
+                (10, "oof", 0.0, 0.001, 0.01),
+                (20, "oof", 0.0, 0.005, 0.05),
+            )
+
+        self.robust_configs = tuple(
+            dict.fromkeys(
+                defaults
+                if robust_configs is None
+                else map(tuple, robust_configs)
+            )
+        )
+
+        if (
+            self.calibration_folds < 2
+            or not 0 <= self.min_feature_coverage <= 1
+            or not 0 <= self.threshold_tolerance <= 1
+            or not self.robust_configs
+        ):
+            raise ValueError(
+                "Invalid robust configuration"
+            )
+
+        if optimization_stage >= 7:
+
+            for config in self.robust_configs:
+
+                support, mode, variance, l1, l2 = config
+
+                if (
+                    not isinstance(
+                        support, (int, np.integer)
+                    )
+                    or support < 1
+                    or mode not in ("oof", "loo")
+                    or not np.all(
+                        np.isfinite([variance, l1, l2])
+                    )
+                    or min(l1, l2) < 0
+                    or (
+                        optimization_stage == 7
+                        and variance <= 0
+                    )
+                    or (
+                        optimization_stage == 8
+                        and (
+                            variance != 0
+                            or mode != "oof"
+                        )
+                    )
+                ):
+                    raise ValueError(
+                        "Invalid candidate"
+                    )
+
+        self.robust_pipeline_ = None
+        self.robust_config_ = None
+
+    # ==========================================================
+    # NUMERICALLY STABLE LOGIT
+    # ==========================================================
+
+    @staticmethod
+    def _logit(p):
+
+        p = np.clip(
+            p,
+            1e-6,
+            1 - 1e-6
+        )
+
+        return (
+            np.log(p)
+            - np.log1p(-p)
+        )
+
+    # ==========================================================
+    # STRATIFIED CROSS-VALIDATION FROM SCRATCH
+    # ==========================================================
+
+    def _robust_folds(self, y, n, seed):
+
+        rng = np.random.default_rng(seed)
+
+        parts = []
+
+        for c in (0, 1):
+
+            indices = rng.permutation(
+                np.flatnonzero(y == c)
+            )
+
+            if len(indices) < n:
+
+                raise ValueError(
+                    "Too few samples for cross-fitting"
+                )
+
+            parts.append(
+                np.array_split(indices, n)
+            )
+
+        for k in range(n):
+
+            val = np.concatenate([
+                p[k] for p in parts
+            ])
+
+            mask = np.ones(
+                len(y),
+                dtype=bool
+            )
+
+            mask[val] = False
+
+            yield np.flatnonzero(mask), val
+
+    # ==========================================================
+    # SUPPORT-AWARE ADAPTIVE TARGET ENCODING
+    # ==========================================================
+
+    def _robust_encode(
+        self,
+        keys,
+        y,
+        groups,
+        support,
+        mode
+    ):
+        """
+        Fit adaptive target encoders.
+
+        E7:
+            Flat target encoding with minimum support.
+
+        E8:
+            Hierarchical target encoding with
+            minimum support and parent fallback.
+
+        Supported training encodings:
+            - Out-of-fold encoding
+            - Leave-one-out encoding (E7 only)
+        """
+
+        n = len(y)
+
+        alpha = np.asarray(
+            self.smoothing_candidates,
+            dtype=float
+        )
+
+        prior = float(y.mean())
+
+        encoded = np.empty(
+            (n, len(groups))
+        )
+
+        maps = {}
+        alphas = {}
+
+        active = np.zeros(
+            len(groups),
+            dtype=bool
+        )
+
+        cache = {}
+
+        folds = list(
+            self._robust_folds(
+                y,
+                self.n_folds,
+                self.random_state
+            )
+        )
+
+        # ------------------------------------------------------
+        # Cache categorical factorization and statistics
+        # ------------------------------------------------------
+
+        def factor(level):
+
+            if level not in cache:
+
+                codes, unique = pd.factorize(
+                    self._group_key(keys, level),
+                    sort=False
+                )
+
+                counts = np.bincount(
+                    codes,
+                    minlength=len(unique)
+                )
+
+                positives = np.bincount(
+                    codes,
+                    weights=y,
+                    minlength=len(unique)
+                )
+
+                first = np.unique(
+                    codes,
+                    return_index=True
+                )[1]
+
+                cache[level] = (
+                    codes,
+                    unique,
+                    counts,
+                    positives,
+                    first
+                )
+
+            return cache[level]
+
+        # ------------------------------------------------------
+        # Process every candidate feature
+        # ------------------------------------------------------
+
+        for j, group in enumerate(groups):
+
+            if self.optimization_stage == 8:
+
+                levels = self._hierarchical_levels(
+                    group
+                )
+
+            else:
+
+                levels = [group]
+
+            data = [
+                factor(level)
+                for level in levels
+            ]
+
+            # ==================================================
+            # FREQUENCY-AWARE FEATURE SELECTION
+            # ==================================================
+
+            (
+                leaf_codes,
+                _,
+                leaf_counts,
+                _,
+                _
+            ) = data[-1]
+
+            coverage = np.mean(
+                leaf_counts[leaf_codes] >= support
+            )
+
+            active[j] = (
+                coverage >= self.min_feature_coverage
+            )
+
+            candidates = np.empty(
+                (n, len(alpha))
+            )
+
+            # ==================================================
+            # LEAVE-ONE-OUT TARGET ENCODING
+            # ==================================================
+
+            if mode == "loo":
+
+                # Exclude the current sample's target
+                # from the global prior.
+
+                p = np.broadcast_to(
+                    (
+                        (y.sum() - y) / (n - 1)
+                    )[:, None],
+                    (n, len(alpha))
+                ).copy()
+
+                for (
+                    codes,
+                    _,
+                    counts,
+                    positives,
+                    _
+                ) in data:
+
+                    # Exclude the current sample's
+                    # category count and target.
+
+                    cnt = counts[codes] - 1
+
+                    pos = positives[codes] - y
+
+                    q = (
+                        pos[:, None] + alpha * p
+                    ) / (
+                        cnt[:, None] + alpha
+                    )
+
+                    p = np.where(
+                        cnt[:, None] >= support,
+                        q,
+                        p
+                    )
+
+                candidates[:] = p
+
+            # ==================================================
+            # OUT-OF-FOLD TARGET ENCODING
+            # ==================================================
+
+            else:
+
+                for ti, vi in folds:
+
+                    p = np.full(
+                        (len(vi), len(alpha)),
+                        y[ti].mean()
+                    )
+
+                    for (
+                        codes,
+                        unique,
+                        _,
+                        _,
+                        _
+                    ) in data:
+
+                        cnt = np.bincount(
+                            codes[ti],
+                            minlength=len(unique)
+                        )[codes[vi]]
+
+                        pos = np.bincount(
+                            codes[ti],
+                            weights=y[ti],
+                            minlength=len(unique)
+                        )[codes[vi]]
+
+                        q = (
+                            pos[:, None] + alpha * p
+                        ) / (
+                            cnt[:, None] + alpha
+                        )
+
+                        # Use parent encoding or global
+                        # prior when support is insufficient.
+
+                        p = np.where(
+                            cnt[:, None] >= support,
+                            q,
+                            p
+                        )
+
+                    candidates[vi] = p
+
+            # ==================================================
+            # ADAPTIVE SMOOTHING PER FEATURE
+            # ==================================================
+
+            brier_scores = np.mean(
+                (
+                    candidates - y[:, None]
+                ) ** 2,
+                axis=0
+            )
+
+            k = int(
+                np.argmin(brier_scores)
+            )
+
+            a = float(alpha[k])
+
+            alphas[group] = a
+
+            encoded[:, j] = candidates[:, k]
+
+            # ==================================================
+            # FULL-TRAINING CATEGORY MAPS
+            # ==================================================
+
+            p = np.full(
+                n,
+                prior
+            )
+
+            group_maps = []
+
+            for level, stats in zip(levels, data):
+
+                (
+                    codes,
+                    unique,
+                    counts,
+                    positives,
+                    first
+                ) = stats
+
+                cnt = counts[codes]
+
+                q = (
+                    positives[codes] + a * p
+                ) / (
+                    cnt + a
+                )
+
+                p = np.where(
+                    cnt >= support,
+                    q,
+                    p
+                )
+
+                # Categories below minimum support
+                # are excluded from the final map.
+
+                mapping = {
+                    key: float(p[i])
+                    for key, i, c in zip(
+                        unique,
+                        first,
+                        counts
+                    )
+                    if c >= support
+                }
+
+                group_maps.append(
+                    (level, mapping)
+                )
+
+            maps[group] = group_maps
+
+        pipeline = {
+            "maps": maps,
+            "alphas": alphas,
+            "prior": prior,
+            "active": active
+        }
+
+        return encoded, pipeline
+
+    # ==========================================================
+    # SUPPORT-AWARE ENCODING INFERENCE
+    # ==========================================================
+
+    def _robust_apply(
+        self,
+        keys,
+        groups,
+        pipe
+    ):
+
+        n = len(
+            next(iter(keys.values()))
+        )
+
+        encoded = np.full(
+            (n, len(groups)),
+            pipe["prior"]
+        )
+
+        seen = np.zeros_like(
+            encoded,
+            dtype=bool
+        )
+
+        cache = {}
+
+        for j, group in enumerate(groups):
+
+            for level, mapping in pipe["maps"][group]:
+
+                if level not in cache:
+
+                    cache[level] = self._group_key(
+                        keys,
+                        level
+                    )
+
+                values = (
+                    cache[level]
+                    .map(mapping)
+                    .to_numpy(dtype=float)
+                )
+
+                valid = np.isfinite(values)
+
+                encoded[valid, j] = values[valid]
+
+                seen[:, j] |= valid
+
+        return encoded, seen
+
+    # ==========================================================
+    # E7/E8: FIT PROBABILITY ESTIMATION BASIS
+    # ==========================================================
+
+    def _fit_robust_basis(
+        self,
+        keys,
+        y,
+        groups,
+        config
+    ):
+
+        support, mode, variance, _, _ = config
+
+        encoded, pipe = self._robust_encode(
+            keys,
+            y,
+            groups,
+            support,
+            mode
+        )
+
+        # ------------------------------------------------------
+        # E7: Gaussian Naive Bayes
+        # ------------------------------------------------------
+
+        if self.optimization_stage == 7:
+
+            mean, std = self._fit_scaler(
+                encoded
+            )
+
+            X = self._transform_scaler(
+                encoded,
+                mean,
+                std
+            )
+
+            theta, var, _, _ = self._fit_gaussian(
+                X,
+                y,
+                variance
+            )
+
+            pipe.update(
+                mean=mean,
+                std=std,
+                theta=theta,
+                var=var
+            )
+
+        # ------------------------------------------------------
+        # E8: Direct Likelihood Ratio
+        # ------------------------------------------------------
+
+        else:
+
+            X = (
+                self._logit(encoded)
+                - self._logit(pipe["prior"])
+            )
+
+        return X, pipe
+
+    # ==========================================================
+    # E7/E8: COMPUTE FEATURE LIKELIHOOD RATIOS
+    # ==========================================================
+
+    def _robust_ratios(
+        self,
+        keys,
+        groups,
+        pipe
+    ):
+
+        encoded, seen = self._robust_apply(
+            keys,
+            groups,
+            pipe
+        )
+
+        if self.optimization_stage == 7:
+
+            X = self._transform_scaler(
+                encoded,
+                pipe["mean"],
+                pipe["std"]
+            )
+
+            R = self._feature_log_likelihood_ratio(
+                X,
+                pipe["theta"],
+                pipe["var"]
+            )
+
+        else:
+
+            # Bayes-derived direct categorical evidence:
+            #
+            # logit(P(Y=1 | category))
+            # - logit(P(Y=1))
+
+            R = (
+                self._logit(encoded)
+                - self._logit(pipe["prior"])
+            )
+
+        # Unsupported or unreliable features contribute
+        # zero evidence to the final classification.
+
+        return np.where(
+            seen & pipe["active"][None, :],
+            R,
+            0.0
+        )
+
+    # ==========================================================
+    # ELASTIC NET FEATURE WEIGHTING
+    # ==========================================================
+
+    def _elastic_weights(
+        self,
+        R,
+        y,
+        l1,
+        l2
+    ):
+        """
+        Projected Adam gradient descent.
+
+        Objective:
+            BCE(y, prediction)
+            + L1 * sum(abs(weights))
+            + L2 / 2 * sum(weights ** 2)
+
+        Constraint:
+            weights >= 0
+        """
+
+        # RMS scaling improves numerical conditioning.
+
+        scale = np.maximum(
+            np.sqrt(
+                np.mean(R ** 2, axis=0)
+            ),
+            0.1
+        )
+
+        Z = R / scale
+
+        u = np.zeros(
+            Z.shape[1]
+        )
+
+        b = float(
+            self._logit(y.mean())
+        )
+
+        # Adam optimizer states.
+
+        m = np.zeros(
+            len(u) + 1
+        )
+
+        v = np.zeros_like(m)
+
+        for t in range(
+            1,
+            self.weight_iterations + 1
+        ):
+
+            score = (
+                np.einsum(
+                    "ij,j->i",
+                    Z,
+                    u
+                )
+                + b
+            )
+
+            error = (
+                self._sigmoid(score)
+                - y
+            )
+
+            # Regularization is applied to the
+            # original, unscaled feature weights.
+            #
+            # Nonnegative constraint allows the L1
+            # penalty to be represented as a linear term.
+
+            grad = np.r_[
+                np.einsum(
+                    "ij,i->j",
+                    Z,
+                    error
+                ) / len(y)
+                + l1 / scale
+                + l2 * u / scale**2,
+
+                error.mean()
+            ]
+
+            # Adam first and second moments.
+
+            m = (
+                0.9 * m
+                + 0.1 * grad
+            )
+
+            v = (
+                0.999 * v
+                + 0.001 * grad**2
+            )
+
+            # Adam bias correction and update.
+
+            step = (
+                self.learning_rate
+                * (m / (1 - 0.9**t))
+                / (
+                    np.sqrt(
+                        v / (1 - 0.999**t)
+                    )
+                    + 1e-8
+                )
+            )
+
+            # Nonnegative projection.
+
+            u = np.maximum(
+                u - step[:-1],
+                0.0
+            )
+
+            # Intercept is not regularized.
+
+            b -= step[-1]
+
+        return (
+            u / scale,
+            float(b)
+        )
+
+    # ==========================================================
+    # CROSS-FITTED LIKELIHOOD ESTIMATION
+    # ==========================================================
+
+    def _crossfit_robust(
+        self,
+        keys,
+        y,
+        groups,
+        config
+    ):
+
+        R = np.empty(
+            (len(y), len(groups))
+        )
+
+        for ti, vi in self._robust_folds(
+            y,
+            self.n_folds,
+            self.random_state + 17
+        ):
+
+            _, pipe = self._fit_robust_basis(
+                self._subset_keys(keys, ti),
+                y[ti],
+                groups,
+                config
+            )
+
+            R[vi] = self._robust_ratios(
+                self._subset_keys(keys, vi),
+                groups,
+                pipe
+            )
+
+        if not np.isfinite(R).all():
+
+            raise FloatingPointError(
+                "Non-finite OOF likelihood ratio"
+            )
+
+        return R
+
+    # ==========================================================
+    # ROBUST OOF THRESHOLD CALIBRATION
+    # ==========================================================
+
+    def _calibrate_threshold(
+        self,
+        scores,
+        y
+    ):
+
+        # Limit threshold search around log-odds zero.
+        # Avoid fitting extreme classification thresholds
+        # to small validation fluctuations.
+
+        grid = np.linspace(
+            -1.5,
+            1.5,
+            61
+        )
+
+        accuracy = np.array([
+            np.mean(
+                (scores >= t) == y
+            )
+            for t in grid
+        ])
+
+        # If several thresholds perform almost equally,
+        # prefer the threshold closest to zero
+        # (equivalent to probability 0.5).
+
+        eligible = np.flatnonzero(
+            accuracy
+            >= accuracy.max() - self.threshold_tolerance
+        )
+
+        k = eligible[
+            np.argmin(
+                np.abs(grid[eligible])
+            )
+        ]
+
+        return (
+            float(accuracy[k]),
+            float(grid[k])
+        )
+
+    # ==========================================================
+    # NESTED OOF CONFIGURATION SELECTION
+    # ==========================================================
+
+    def _select_robust_config(
+        self,
+        keys,
+        y,
+        groups
+    ):
+        """
+        Generate OOF predictions from the complete
+        weighted classification pipeline.
+
+        Every calibration fold independently learns:
+            - Adaptive target encoding
+            - Feature support selection
+            - Gaussian density or direct evidence
+            - Cross-fitted feature likelihoods
+            - Elastic Net weights
+
+        The held-out fold is used only for prediction.
+        """
+
+        # Reuse likelihood ratios for configurations
+        # sharing identical preprocessing and density.
+
+        by_basis = {}
+
+        for config in self.robust_configs:
+
+            by_basis.setdefault(
+                config[:3],
+                []
+            ).append(config)
+
+        scores = {
+            cfg: np.empty(len(y))
+            for cfg in self.robust_configs
+        }
+
+        folds = self._robust_folds(
+            y,
+            self.calibration_folds,
+            self.random_state + 101
+        )
+
+        for fold, (ti, vi) in enumerate(
+            folds,
+            1
+        ):
+
+            self._log(
+                f"E{self.optimization_stage}: "
+                f"calibration fold "
+                f"{fold}/{self.calibration_folds}"
+            )
+
+            kt = self._subset_keys(
+                keys,
+                ti
+            )
+
+            kv = self._subset_keys(
+                keys,
+                vi
+            )
+
+            yt = y[ti]
+
+            for configs in by_basis.values():
+
+                cfg = configs[0]
+
+                # Generate training ratios without
+                # using each sample's own label.
+
+                R = self._crossfit_robust(
+                    kt,
+                    yt,
+                    groups,
+                    cfg
+                )
+
+                # Fit the fold inference pipeline.
+
+                _, pipe = self._fit_robust_basis(
+                    kt,
+                    yt,
+                    groups,
+                    cfg
+                )
+
+                # Held-out fold evidence.
+
+                Rv = self._robust_ratios(
+                    kv,
+                    groups,
+                    pipe
+                )
+
+                # Compare Elastic Net configurations.
+
+                for cfg in configs:
+
+                    w, b = self._elastic_weights(
+                        R,
+                        yt,
+                        cfg[3],
+                        cfg[4]
+                    )
+
+                    scores[cfg][vi] = (
+                        Rv @ w + b
+                    )
+
+        self.optimization_history_ = []
+
+        best = None
+
+        for cfg in self.robust_configs:
+
+            acc, threshold = (
+                self._calibrate_threshold(
+                    scores[cfg],
+                    y
+                )
+            )
+
+            row = {
+                "config": cfg,
+                "accuracy": acc,
+                "threshold": threshold
+            }
+
+            self.optimization_history_.append(
+                row
+            )
+
+            if (
+                best is None
+                or acc > best["accuracy"]
+            ):
+
+                best = row
+
+        self.calibration_scores_ = (
+            scores[best["config"]]
+        )
+
+        return best
+
+    # ==========================================================
+    # PUBLIC TRAINING API
+    # ==========================================================
+
+    def fit(self, X, y=None):
+
+        # Preserve E0-E6.
+
+        if self.optimization_stage <= 6:
+
+            return super().fit(
+                X,
+                y
+            )
+
+        self.is_fitted = False
+
+        self._validate_dataframe(X)
+
+        y = self._validate_target(
+            X,
+            X["is_canceled"].to_numpy()
+            if y is None
+            else y
+        )
+
+        # ------------------------------------------------------
+        # 1. Feature engineering
+        # ------------------------------------------------------
+
+        keys = self._build_feature_keys(X)
+
+        groups = self._candidate_groups(keys)
+
+        # ------------------------------------------------------
+        # 2. Nested configuration selection
+        # ------------------------------------------------------
+
+        best = self._select_robust_config(
+            keys,
+            y,
+            groups
+        )
+
+        cfg = best["config"]
+
+        self.robust_config_ = cfg
+
+        self.validation_accuracy_ = (
+            best["accuracy"]
+        )
+
+        self.log_lr_threshold_ = (
+            best["threshold"]
+        )
+
+        self.threshold_ = float(
+            self._sigmoid(
+                self.log_lr_threshold_
+            )
+        )
+
+        # ------------------------------------------------------
+        # 3. Final cross-fitted likelihood ratios
+        # ------------------------------------------------------
+
+        R = self._crossfit_robust(
+            keys,
+            y,
+            groups,
+            cfg
+        )
+
+        # ------------------------------------------------------
+        # 4. Final inference pipeline
+        # ------------------------------------------------------
+
+        self.X_fit_, pipe = (
+            self._fit_robust_basis(
+                keys,
+                y,
+                groups,
+                cfg
+            )
+        )
+
+        # ------------------------------------------------------
+        # 5. Final Elastic Net feature weights
+        # ------------------------------------------------------
+
+        w, b = self._elastic_weights(
+            R,
+            y,
+            cfg[3],
+            cfg[4]
+        )
+
+        self.feature_weights_ = (
+            w * pipe["active"]
+        )
+
+        self.intercept_ = b
+
+        # ------------------------------------------------------
+        # 6. Store final model parameters
+        # ------------------------------------------------------
+
+        self.robust_pipeline_ = pipe
+
+        self.oof_likelihood_ratios_ = R
+
+        self.candidate_groups_ = groups
+
+        self.selected_groups_ = groups
+
+        self.feature_names_ = [
+            " × ".join(g)
+            for g in groups
+        ]
+
+        self.n_features_in_ = len(groups)
+
+        self.feature_smoothing_ = (
+            pipe["alphas"]
+        )
+
+        self.category_maps_ = (
+            pipe["maps"]
+        )
+
+        self.encoding_prior_ = (
+            pipe["prior"]
+        )
+
+        self.class_counts_ = np.bincount(
+            y,
+            minlength=2
+        )
+
+        self.class_priors_ = (
+            self.class_counts_ / len(y)
+        )
+
+        self.log_class_priors_ = np.log(
+            self.class_priors_
+        )
+
+        self.regularization_ = cfg[4]
+
+        self.l1_regularization_ = cfg[3]
+
+        self.var_smoothing_ = (
+            cfg[2]
+            if self.optimization_stage == 7
+            else None
+        )
+
+        self.n_components_ = (
+            1
+            if self.optimization_stage == 7
+            else 0
+        )
+
+        self.theta_ = pipe.get("theta")
+
+        self.var_ = pipe.get("var")
+
+        self.scaler_mean_ = pipe.get("mean")
+
+        self.scaler_std_ = pipe.get("std")
+
+        self.is_fitted = True
+
+        return self
+
+    # ==========================================================
+    # PUBLIC TRANSFORMATION API
+    # ==========================================================
+
+    def transform(self, X):
+
+        if self.optimization_stage <= 6:
+
+            return super().transform(X)
+
+        self._check_fitted()
+
+        pipe = self.robust_pipeline_
+
+        keys = self._build_feature_keys(X)
+
+        # E8 returns direct feature evidence,
+        # not standardized Gaussian input.
+
+        if self.optimization_stage == 8:
+
+            return self._robust_ratios(
+                keys,
+                self.selected_groups_,
+                pipe
+            )
+
+        # E7 returns standardized target encoding.
+
+        encoded, _ = self._robust_apply(
+            keys,
+            self.selected_groups_,
+            pipe
+        )
+
+        return self._transform_scaler(
+            encoded,
+            pipe["mean"],
+            pipe["std"]
+        )
+
+    # ==========================================================
+    # FINAL INFERENCE
+    # ==========================================================
+
+    def decision_function(self, X):
+
+        if self.optimization_stage <= 6:
+
+            return super().decision_function(X)
+
+        self._check_fitted()
+
+        R = self._robust_ratios(
+            self._build_feature_keys(X),
+            self.selected_groups_,
+            self.robust_pipeline_
+        )
+
+        return (
+            R @ self.feature_weights_
+            + self.intercept_
+        )
+
+    # ==========================================================
+    # FEATURE INFORMATION
+    # ==========================================================
+
+    def get_feature_info(self):
+
+        if self.optimization_stage <= 6:
+
+            return super().get_feature_info()
+
+        self._check_fitted()
+
+        info = pd.DataFrame({
+
+            "feature": self.feature_names_,
+
+            "weight": self.feature_weights_,
+
+            "encoding_smoothing": [
+                self.feature_smoothing_[g]
+                for g in self.selected_groups_
+            ],
+
+            "sufficient_support": (
+                self.robust_pipeline_["active"]
+            ),
+
+            "is_active": (
+                self.feature_weights_ > 1e-8
+            )
+        })
+
+        if self.optimization_stage == 7:
+
+            for c in (0, 1):
+
+                info[f"mean_class_{c}"] = (
+                    self.theta_[c]
+                )
+
+                info[f"variance_class_{c}"] = (
+                    self.var_[c]
+                )
+
+        return info
+
+    # ==========================================================
+    # MIXTURE INFORMATION
+    # ==========================================================
+
+    def get_mixture_info(self):
+
+        if self.optimization_stage >= 7:
+
+            raise RuntimeError(
+                "E7/E8 do not use Gaussian mixtures."
+            )
+
+        return super().get_mixture_info()
+
+    # ==========================================================
+    # MODEL SUMMARY
+    # ==========================================================
+
+    def summary(self):
+
+        if self.optimization_stage <= 6:
+
+            return super().summary()
+
+        self._check_fitted()
+
+        print(
+            f"E{self.optimization_stage}: "
+            "Robust weighted "
+            + (
+                "Gaussian NB"
+                if self.optimization_stage == 7
+                else "Direct likelihood ratio NB"
+            )
+        )
+
+        print(
+            "Config (support, encoding, variance, L1, L2):",
+            self.robust_config_
+        )
+
+        print(
+            "OOF selection accuracy:",
+            self.validation_accuracy_
+        )
+
+        print(
+            "Probability threshold:",
+            self.threshold_
+        )
+
+        print(
+            self.get_feature_info()
+            .sort_values(
+                "weight",
+                ascending=False
+            )
+            .head(15)
+        )
 
 # ==================================================================
 # COST-SENSITIVE CLASSIFICATION

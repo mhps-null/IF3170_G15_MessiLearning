@@ -1,0 +1,48 @@
+{
+    "selected_stage": 3,
+    "model_name": "Adaptive Target Encoding",
+    "mean_cv_accuracy": 0.849890741295651,
+    "std_cv_accuracy": 0.003132284377448759,
+    "mean_f1_macro": 0.8263212641176209,
+    "outer_folds": 5,
+    "seeds": [
+        42,
+        123,
+        2026
+    ],
+    "model_config": {
+        "optimization_stage": 3,
+        "encoding_smoothing": 15.0,
+        "smoothing_candidates": [
+            1.0,
+            3.0,
+            5.0,
+            10.0,
+            15.0,
+            30.0,
+            60.0,
+            120.0
+        ],
+        "variance_candidates": [
+            0.03,
+            0.1,
+            0.3,
+            1.0,
+            3.0
+        ],
+        "regularization_candidates": [
+            0.001,
+            0.01,
+            0.1
+        ],
+        "calibration_folds": 3,
+        "n_folds": 3,
+        "learning_rate": 0.03,
+        "weight_iterations": 200,
+        "min_feature_coverage": 0.2,
+        "threshold_tolerance": 0.0005,
+        "robust_configs": null,
+        "random_state": 42,
+        "verbose": false
+    }
+}

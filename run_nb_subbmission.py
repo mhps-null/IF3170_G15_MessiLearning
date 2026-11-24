@@ -1,141 +1,120 @@
-import os
-
+import json
 import numpy as np
 import pandas as pd
 
+from pathlib import Path
 from src.naive_bayes import NaiveBayes
 
-from src.utils import (
-    accuracy_score,
-    confusion_matrix,
-    f1_score,
-    precision_score,
-    recall_score,
-    calculate_custom_cost,
-    set_global_seed
+
+ROOT = Path(__file__).resolve().parent
+
+# ==============================================================
+# LOAD BEST MODEL CONFIGURATION
+# ==============================================================
+
+with open(
+    ROOT / "output/experiments/nb_best_config.json",
+    "r",
+    encoding="utf-8"
+) as file:
+
+    experiment = json.load(file)
+
+config = experiment["model_config"]
+
+config["verbose"] = True
+
+print(
+    "Selected stage:",
+    experiment["selected_stage"]
 )
 
-
-set_global_seed()
+print(
+    "Mean CV accuracy:",
+    experiment["mean_cv_accuracy"]
+)
 
 # ==============================================================
 # LOAD DATA
 # ==============================================================
 
-tr = pd.read_csv("data/processed/train_dtl.csv")
-va = pd.read_csv("data/processed/val_dtl.csv")
-te = pd.read_csv("data/processed/test_dtl.csv")
-
-y_tr = tr["is_canceled"].to_numpy(dtype=int)
-y_va = va["is_canceled"].to_numpy(dtype=int)
-
-# ==============================================================
-# TRAIN MODEL
-# ==============================================================
-
-nb = NaiveBayes(
-    optimization_stage=2,
-
-    encoding_smoothing=15.0,
-
-    variance_candidates=(
-        0.03, 0.1, 0.3, 1.0, 3.0
-    ),
-
-    regularization_candidates=(
-        0.001, 0.01, 0.1
-    ),
-
-    smoothing_candidates=(
-        1.0, 3.0, 5.0, 10.0,
-        15.0, 30.0, 60.0, 120.0
-    ),
-
-    learning_rate=0.03,
-
-    weight_iterations=200,
-
-    n_folds=5,
-
-    random_state=42
+tr = pd.read_csv(
+    ROOT / "data/processed/train_dtl.csv"
 )
 
-nb.fit(tr, y_tr)
-
-nb.summary()
-
-# ==============================================================
-# VALIDATION
-# ==============================================================
-
-pred_va = nb.predict(va)
-
-macro_f1 = (
-    f1_score(y_va, pred_va)
-    + f1_score(1 - y_va, 1 - pred_va)
-) / 2
-
-tn, fp, fn, tp = confusion_matrix(
-    y_va,
-    pred_va
+va = pd.read_csv(
+    ROOT / "data/processed/val_dtl.csv"
 )
 
-print("\nVALIDATION RESULTS")
-
-print(f"Accuracy  : {accuracy_score(y_va, pred_va):.6f}")
-print(f"Precision : {precision_score(y_va, pred_va):.6f}")
-print(f"Recall    : {recall_score(y_va, pred_va):.6f}")
-print(f"F1 Binary : {f1_score(y_va, pred_va):.6f}")
-print(f"F1 Macro  : {macro_f1:.6f}")
-
-print(f"\nTN={tn} FP={fp} FN={fn} TP={tp}")
-
-print(
-    "Custom Cost:",
-    calculate_custom_cost(y_va, pred_va)
+te = pd.read_csv(
+    ROOT / "data/processed/test_dtl.csv"
 )
 
 # ==============================================================
-# REFIT FOR KAGGLE SUBMISSION
+# COMBINE ALL LABELED DATA
 # ==============================================================
-
-# Only labeled training and validation data are combined.
-# Kaggle test data is NEVER included in training.
 
 full_train = pd.concat(
     [tr, va],
     ignore_index=True
 )
 
-full_y = full_train["is_canceled"].to_numpy(
-    dtype=int
+y_train = full_train[
+    "is_canceled"
+].to_numpy(dtype=int)
+
+X_train = full_train.drop(
+    columns=["is_canceled"]
 )
 
-nb.fit(full_train, full_y)
+# ==============================================================
+# REFIT SELECTED MODEL
+# ==============================================================
+
+nb = NaiveBayes(
+    **config
+)
+
+nb.fit(
+    X_train,
+    y_train
+)
+
+nb.summary()
 
 # ==============================================================
-# SAVE MODEL
+# SAVE FINAL MODEL
 # ==============================================================
+
+stage = nb.optimization_stage
 
 nb.save(
-    "output/models/naive_bayes_model_2.pkl"
+    str(
+        ROOT
+        / "output/models"
+        / f"naive_bayes_E{stage}_final.pkl"
+    )
 )
 
 # ==============================================================
-# GENERATE SUBMISSION
+# GENERATE PREDICTIONS
 # ==============================================================
 
+predictions = nb.predict(te)
+
 sample = pd.read_csv(
-    "data/raw/sample_submission.csv"
+    ROOT / "data/raw/sample_submission.csv"
 )
 
 submission = pd.DataFrame({
     "id": te["id"],
-    "is_canceled": nb.predict(te).astype(int)
+    "is_canceled": predictions.astype(int)
 })
 
-assert list(submission.columns) == list(sample.columns)
+assert submission["id"].is_unique
+assert sample["id"].is_unique
 assert len(submission) == len(sample)
+
 assert set(submission["id"]) == set(sample["id"])
 
 submission = (
@@ -145,17 +124,38 @@ submission = (
     .reset_index()
 )
 
-os.makedirs(
-    "output/submissions",
+assert list(submission.columns) == list(sample.columns)
+
+assert np.isin(
+    submission["is_canceled"],
+    [0, 1]
+).all()
+
+# ==============================================================
+# SAVE SUBMISSION
+# ==============================================================
+
+output_dir = ROOT / "output/submissions"
+
+output_dir.mkdir(
+    parents=True,
     exist_ok=True
 )
 
+output_path = (
+    output_dir
+    / f"submission_nb_E{stage}_final.csv"
+)
+
 submission.to_csv(
-    "output/submissions/submission_nb.csv",
+    output_path,
     index=False
 )
 
-print("\nSUBMISSION GENERATED")
+print(
+    "\nSubmission saved:",
+    output_path
+)
 
 print(submission.head())
 
