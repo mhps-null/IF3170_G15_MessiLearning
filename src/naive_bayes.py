@@ -1227,19 +1227,20 @@ def export_bayesian_network_graph(
         node = f"feature_{j}"
         graph.add_edge(target_node, node)
         feature_nodes.append(node)
-        labels[node] = textwrap.fill(str(name), width=22)
+        labels[node] = textwrap.fill(str(name), width=18, break_long_words=False)
     n_features = len(feature_nodes)
     positions = {target_node: (0, 0)}
     angles = np.linspace(np.pi / 2, np.pi / 2 + 2 * np.pi, n_features, endpoint=False)
     for node, angle in zip(feature_nodes, angles):
         positions[node] = (3.0 * np.cos(angle), 3.0 * np.sin(angle))
     fig, ax = plt.subplots(figsize=(14, 11))
+    target_node_size, feature_node_size = 5500, 7200
     nx.draw_networkx_nodes(
         graph,
         positions,
         nodelist=[target_node],
         node_color="#F59E0B",
-        node_size=5500,
+        node_size=target_node_size,
         ax=ax
     )
     nx.draw_networkx_nodes(
@@ -1247,10 +1248,19 @@ def export_bayesian_network_graph(
         positions,
         nodelist=feature_nodes,
         node_color="#93C5FD",
-        node_size=5000,
+        node_size=feature_node_size,
         ax=ax
     )
-    nx.draw_networkx_edges(graph, positions, arrows=True, arrowsize=22, width=1.8, node_size=5000, ax=ax)
+    nx.draw_networkx_edges(
+        graph,
+        positions,
+        arrows=True,
+        arrowsize=22,
+        width=1.8,
+        nodelist=[target_node, *feature_nodes],
+        node_size=[target_node_size] + [feature_node_size] * n_features,
+        ax=ax,
+    )
     nx.draw_networkx_labels(graph, positions, labels=labels, font_size=9, ax=ax)
     ax.set_title("Gaussian Naive Bayes - Bayesian Network", fontsize=17, fontweight="bold")
     ax.margins(0.2)

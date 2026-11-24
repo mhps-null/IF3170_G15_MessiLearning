@@ -58,6 +58,36 @@ def calculate_custom_cost(y_true, y_pred, cost_fp=2.0, cost_fn=1.0):
     return (cost_fp * fp) + (cost_fn * fn)
 
 
+def evaluate_cost_thresholds(y_true, probabilities, cost_fp=2.0, cost_fn=1.0):
+    """Bandingkan ambang 0.5 dan ambang berbasis biaya pada probabilitas kelas 1."""
+    y_true = np.asarray(y_true)
+    probabilities = np.asarray(probabilities, dtype=float)
+    if (
+        y_true.ndim != 1 or y_true.size == 0 or not np.isin(y_true, [0, 1]).all()
+        or probabilities.shape != y_true.shape
+        or not np.isfinite(probabilities).all()
+        or np.any((probabilities < 0) | (probabilities > 1))
+    ):
+        raise ValueError("Label biner dan probabilitas harus berupa vektor valid yang sejajar.")
+    total_cost = cost_fp + cost_fn
+    if not np.isfinite(total_cost) or min(cost_fp, cost_fn) < 0 or total_cost <= 0:
+        raise ValueError("Bobot biaya harus nonnegatif dengan jumlah positif dan terbatas.")
+
+    rows = []
+    for rule, threshold in (("Standar", 0.5), ("Cost-sensitive", cost_fp / total_cost)):
+        predictions = (probabilities >= threshold).astype(int)
+        tn, fp, fn, tp = confusion_matrix(y_true, predictions)
+        rows.append({
+            "Aturan": rule,
+            "Ambang": threshold,
+            "TN": tn, "FP": fp, "FN": fn, "TP": tp,
+            "Macro F1": 0.5 * (f1_score(y_true, predictions) +
+                               f1_score(1 - y_true, 1 - predictions)),
+            "Total biaya": calculate_custom_cost(y_true, predictions, cost_fp, cost_fn),
+        })
+    return rows
+
+
 def k_fold_split(X, y, k=5, shuffle=True, seed=RANDOM_SEED):
     """
     Generator K-Fold Cross Validation manual murni menggunakan NumPy.
