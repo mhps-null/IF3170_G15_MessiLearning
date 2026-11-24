@@ -24,6 +24,17 @@ Conceptual references:
     https://scikit-learn.org/stable/modules/preprocessing.html
     https://scikit-learn.org/stable/modules/feature_selection.html
 
+Paper references:
+    G. H. John and P. Langley, “Estimating continuous distributions in Bayesian classifiers,” in Proceedings of the Eleventh Conference on Uncertainty in Artificial Intelligence (UAI), 1995, pp. 338-345.
+
+    N. A. Zaidi, J. Cerquides, M. J. Carman, and G. I. Webb, “Alleviating naive Bayes attribute independence assumption by attribute weighting,” Journal of Machine Learning Research, vol. 14, no. 60, pp. 1947-1988, 2013.
+
+    D. Micci-Barreca, “A preprocessing scheme for high-cardinality categorical attributes in classification and prediction problems,” ACM SIGKDD Explorations Newsletter, vol. 3, no. 1, pp. 27-32, 2001, doi: 10.1145/507533.507538.
+
+    Scikit-learn developers, “Target encoder's internal cross fitting,” Scikit-learn Documentation. [Online]. Available: https://scikit-learn.org/stable/auto_examples/preprocessing/plot_target_encoder_cross_val.html. [Accessed: Nov. 24, 2026].
+
+    F. Pargent, F. Pfisterer, J. Thomas, and B. Bischl, “Regularized target encoding outperforms traditional methods in supervised machine learning with high cardinality features,” Computational Statistics, vol. 37, pp. 2671–2692, 2022, doi: 10.1007/s00180-022-01207-6.
+
 """
 
 import os
