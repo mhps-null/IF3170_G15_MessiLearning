@@ -11,8 +11,8 @@ Implementasi algoritma **Supervised Learning *from Scratch*** (KNN, Decision Tre
 | :---: | :--- | :--- |
 | **13524042** | Data Engineering Pipeline (`src/preprocessing.py`) & KNN (`src/knn.py`) | `feat/anggota1-knn-pipeline` |
 | **13524053** | Decision Tree Learning — **C4.5 *from Scratch*** (`src/dtl.py`), Bonus Visualisasi Top-$N$ Tree (`export_tree_visualization`), & Bonus Optimasi DTL (**PSO + Histogram Quantile Split $B=64$ + Minimal Cost-Complexity Weakest-Link Pruning Path**, ablasi Surrogate Splits) | `feat/anggota2-dtl-integration` |
-| **13524060** | Logistic Regression (`src/logistic_regression.py`), Adam Optimizer & Loss Contour Video | `feat/anggota3-logreg` |
-| **13524057** | Support Vector Machine (`src/svm.py`), SMO/Pegasos & 2D Margin Plotter | `feat/anggota4-svm` |
+| **13524060** | Logistic Regression NumPy (`src/logistic_regression.py`), FISTA dengan backtracking, dan video kontur | `feat/logistic-regression` |
+| **13524057** | Support Vector Machine (`src/svm.py`), SMO & 2D Margin Plotter | `feat/anggota4-svm` |
 | **13524063** | Naive Bayes & TAN (`src/naive_bayes.py`), BN DAG Visualizer & Cost-Sensitive Classification | `feat/anggota5-nb-cost` |
 
 ---
@@ -49,7 +49,8 @@ IF3170_G15_MessiLearning/
 │   ├── preprocessing.py                      # Pipeline pemrosesan data bebas leakage & dual-export (Anggota 1)
 │   ├── knn.py                                # KNN from scratch (Anggota 1)
 │   ├── dtl.py                                # DTL C4.5 from scratch, PSO + Hist + Minimal CCP, & Top-N visualizer (Anggota 2)
-│   ├── logistic_regression.py                # Logistic Regression & video maker (Anggota 3)
+│   ├── logistic_regression.py                # Logistic Regression NumPy dengan FISTA (Anggota 3)
+│   ├── logistic_contour.py                   # Video kontur dan lintasan FISTA (Anggota 3)
 │   ├── svm.py                                # SVM with Kernels & 2D margin plotter (Anggota 4)
 │   └── naive_bayes.py                        # Naive Bayes / TAN & DAG visualizer (Anggota 5)
 ├── FOUNDATION.md                             # Dokumen kontrak teknis & arsitektur tim
@@ -59,7 +60,7 @@ IF3170_G15_MessiLearning/
 
 ---
 
-### Ringkasan Hasil & Reproduksibilitas Modul DTL — Anggota 2 (`13524053`)
+### Ringkasan Hasil & Reproduksibilitas Modul DTL - Anggota 2 (`13524053`)
 
 Modul [`src/dtl.py`](src/dtl.py) diimplementasikan **100% pure NumPy** (tanpa impor `scikit-learn` maupun `scipy`) dalam bentuk **1 pohon keputusan tunggal (non-ensemble)** berbasis varian **C4.5** (*Gain Ratio* + *above-average gain*, *multi-way categorical split*, penanganan `NaN` asli Quinlan):
 
